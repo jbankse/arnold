@@ -86,11 +86,27 @@ pub async fn handle_user_message(state: DaemonState, session: SessionState, text
     };
 
     loop {
-        let frame = cpu.read_up().await?;
-        match frame {
-            None | Some(UpFrame::Finished) => break,
-            Some(UpFrame::Other) => continue,
-            Some(UpFrame::Syscall { id, method, params }) => {
+        let frame_with_raw = cpu.read_up().await?;
+        match frame_with_raw {
+            None => break,
+            Some((UpFrame::Finished, _)) => break,
+            Some((UpFrame::Other, raw)) => {
+                // cpu emits provider_error frames when an LLM call fails terminally
+                // (bad auth, exhausted retry budget, refusal, etc.). v0a surfaces
+                // these to the user; everything else (usage, archive_l2) is ignored.
+                if raw.get("type").and_then(|v| v.as_str()) == Some("provider_error") {
+                    let message = raw.get("message")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| format!("provider error (no message): {raw}"));
+                    let _ = session.client.send(DaemonEvent::Error {
+                        session_id: Some(session.session_id),
+                        message: format!("provider error: {message}"),
+                    });
+                }
+                continue;
+            }
+            Some((UpFrame::Syscall { id, method, params }, _)) => {
                 let raw = serde_json::json!({ "method": method, "params": params });
                 match serde_json::from_value::<Syscall>(raw) {
                     Ok(syscall) => match dispatch(&ctx, syscall).await {

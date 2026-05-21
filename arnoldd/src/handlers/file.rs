@@ -79,7 +79,7 @@ pub async fn search(
     cmd.arg("--json").arg("--max-count").arg("20").arg("--max-columns").arg("200");
     if let Some(g) = glob { cmd.arg("--glob").arg(g); }
     cmd.arg(&query).arg(&search_path);
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
 
     let mut child = cmd.spawn()
         .map_err(|e| anyhow!("ripgrep (rg) not found on PATH or failed to spawn: {e}"))?;

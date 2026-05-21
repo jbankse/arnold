@@ -11,7 +11,9 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 pub enum UpFrame {
     Syscall { id: u64, method: String, params: Value },
     Finished,
-    /// Catch-all for usage/provider_error/archive_l2 etc. that v0a ignores.
+    /// Catch-all for any frame type the v0a daemon doesn't directly handle
+    /// (usage, archive_l2, etc.). The session loop pattern-matches the inner
+    /// frame to surface provider_error to the user as a DaemonEvent::Error.
     #[serde(other)]
     Other,
 }
@@ -74,13 +76,15 @@ impl CpuProcess {
         self.write_frame(&DownFrame::Error { id, message }).await
     }
 
-    pub async fn read_up(&mut self) -> Result<Option<UpFrame>> {
+    pub async fn read_up(&mut self) -> Result<Option<(UpFrame, Value)>> {
         loop {
             let Some(line) = self.stdout_lines.next_line().await? else { return Ok(None); };
             if line.trim().is_empty() { continue; }
-            let frame: UpFrame = serde_json::from_str(&line)
+            let raw: Value = serde_json::from_str(&line)
                 .map_err(|e| anyhow!("cpu sent malformed frame '{line}': {e}"))?;
-            return Ok(Some(frame));
+            let frame: UpFrame = serde_json::from_value(raw.clone())
+                .map_err(|e| anyhow!("cpu sent malformed frame '{line}': {e}"))?;
+            return Ok(Some((frame, raw)));
         }
     }
 
