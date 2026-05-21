@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["arnold-wire", "arnoldd", "arnold-cli"]
+members = ["arnold-wire", "arnoldd"]
 
 [workspace.package]
 edition = "2021"
