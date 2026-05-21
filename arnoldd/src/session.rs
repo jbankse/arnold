@@ -28,6 +28,7 @@ pub struct DaemonState {
     pub jail: Arc<Jail>,
     pub memory: Arc<MemoryStore>,
     pub sessions: Arc<Mutex<HashMap<Uuid, SessionState>>>,
+    pub usage: crate::usage_meter::UsageMeter,
 }
 
 impl DaemonState {
@@ -37,6 +38,7 @@ impl DaemonState {
             jail: Arc::new(jail),
             memory: Arc::new(memory),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            usage: crate::usage_meter::UsageMeter::default(),
         }
     }
 
@@ -52,6 +54,7 @@ impl DaemonState {
 
     pub async fn close(&self, id: Uuid) {
         self.sessions.lock().await.remove(&id);
+        let _ = self.usage.forget(id);
     }
 }
 
@@ -90,7 +93,16 @@ pub async fn handle_user_message(state: DaemonState, session: SessionState, text
         match frame_with_raw {
             None => break,
             Some((UpFrame::Finished, _)) => break,
-            Some((UpFrame::Usage { .. }, _)) => { continue; }
+            Some((UpFrame::Usage { provider, model, estimated_cost_usd, actual_cost_usd, .. }, _)) => {
+                match state.usage.record(session.session_id, provider, model, estimated_cost_usd, actual_cost_usd) {
+                    Ok(Some(tc)) => {
+                        let _ = session.client.send(crate::usage_meter::cost_event(session.session_id, &tc));
+                    }
+                    Ok(None) => { /* no cost number; skip */ }
+                    Err(e) => tracing::warn!("usage_meter.record failed: {e}"),
+                }
+                continue;
+            }
             Some((UpFrame::Other, raw)) => {
                 // cpu emits provider_error frames when an LLM call fails terminally
                 // (bad auth, exhausted retry budget, refusal, etc.). v0a surfaces
