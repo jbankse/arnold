@@ -1,0 +1,12 @@
+[Unit]
+Description=Arnold personal-agent daemon
+After=network.target
+
+[Service]
+ExecStart=__BIN_DIR__/arnoldd
+Restart=on-failure
+StandardOutput=append:__ARNOLD_DIR__/arnoldd.log
+StandardError=append:__ARNOLD_DIR__/arnoldd.err
+
+[Install]
+WantedBy=default.target
