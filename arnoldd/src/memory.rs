@@ -100,11 +100,16 @@ fn parse_topic(text: &str) -> Result<MemoryTopic> {
 }
 
 fn serialize_topic(t: &MemoryTopic) -> String {
-    let kind = serde_json::to_value(&t.kind).unwrap().as_str().unwrap().to_string();
-    format!(
-        "---\nname: {}\ndescription: {}\ntype: {}\n---\n{}",
-        t.name, t.description, kind, t.body
-    )
+    #[derive(serde::Serialize)]
+    struct Fm<'a> {
+        name: &'a str,
+        description: &'a str,
+        #[serde(rename = "type")]
+        kind: &'a MemoryType,
+    }
+    let fm = Fm { name: &t.name, description: &t.description, kind: &t.kind };
+    let yaml = serde_yaml::to_string(&fm).expect("yaml serialize");
+    format!("---\n{}---\n{}", yaml, t.body)
 }
 
 #[cfg(test)]
@@ -129,5 +134,22 @@ mod tests {
 
         let index = store.index().unwrap();
         assert!(index.contains("Test Topic"));
+    }
+
+    #[test]
+    fn round_trip_with_colon_in_name() {
+        let tmp = TempDir::new().unwrap();
+        let store = MemoryStore::open(tmp.path()).unwrap();
+        let topic = MemoryTopic {
+            name: "Decision provenance: Arnold v0 choices".into(),
+            description: "the why behind: load-bearing v0 picks".into(),
+            kind: MemoryType::Project,
+            body: "body\n".into(),
+        };
+        store.write("provenance", &topic).unwrap();
+        let read = store.read("provenance").unwrap();
+        assert_eq!(read.name, "Decision provenance: Arnold v0 choices");
+        assert_eq!(read.description, "the why behind: load-bearing v0 picks");
+        assert_eq!(read.kind, MemoryType::Project);
     }
 }
