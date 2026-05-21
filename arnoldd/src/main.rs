@@ -2,6 +2,7 @@ mod config;
 mod inbox;
 mod jail;
 mod memory;
+mod plan_frame;
 mod schema;
 mod session;
 mod syscall;
