@@ -1,3 +1,4 @@
+mod bios_process;
 mod config;
 mod cpu_process;
 mod handler;
@@ -11,8 +12,8 @@ mod precheck;
 mod schema;
 mod session;
 mod syscall;
-mod usage_meter;
 mod uds_server;
+mod usage_meter;
 
 use anyhow::Result;
 use tracing::{info, error};
