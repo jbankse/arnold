@@ -1,4 +1,5 @@
 mod config;
+mod inbox;
 mod uds_server;
 
 use anyhow::Result;
