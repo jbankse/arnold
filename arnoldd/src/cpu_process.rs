@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
@@ -41,6 +42,10 @@ pub struct CpuProcess {
     stdin: ChildStdin,
     stdout_lines: tokio::io::Lines<BufReader<ChildStdout>>,
     task_id: String,
+    /// Most-recent ~16k of cpu's stderr, drained continuously by a background
+    /// task so we can surface it as a user-facing error when cpu fatals without
+    /// emitting a `finished` up-frame (e.g. missing ANTHROPIC_API_KEY).
+    stderr_tail: Arc<Mutex<String>>,
 }
 
 impl CpuProcess {
@@ -57,14 +62,38 @@ impl CpuProcess {
             .env("AGENT_MODEL", model)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .map_err(|e| anyhow!("failed to spawn cpu at {}: {e}", binary.display()))?;
         let stdin = child.stdin.take().ok_or_else(|| anyhow!("no stdin on cpu"))?;
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout on cpu"))?;
+        let stderr = child.stderr.take().ok_or_else(|| anyhow!("no stderr on cpu"))?;
         let stdout_lines = BufReader::new(stdout).lines();
-        Ok(Self { child, stdin, stdout_lines, task_id })
+
+        let stderr_tail = Arc::new(Mutex::new(String::new()));
+        let tail_writer = stderr_tail.clone();
+        let mut stderr_lines = BufReader::new(stderr).lines();
+        tokio::spawn(async move {
+            while let Ok(Some(line)) = stderr_lines.next_line().await {
+                if let Ok(mut buf) = tail_writer.lock() {
+                    buf.push_str(&line);
+                    buf.push('\n');
+                    if buf.len() > 16_000 {
+                        let drain_until = buf.len() - 12_000;
+                        buf.drain(..drain_until);
+                    }
+                }
+            }
+        });
+
+        Ok(Self { child, stdin, stdout_lines, task_id, stderr_tail })
+    }
+
+    /// Snapshot the buffered cpu stderr so far. Used by the session loop to
+    /// surface a meaningful error when cpu fatals before emitting any up-frame.
+    pub fn stderr_tail(&self) -> String {
+        self.stderr_tail.lock().map(|s| s.clone()).unwrap_or_default()
     }
 
     pub async fn send_plan(&mut self, plan: Value) -> Result<()> {

@@ -109,11 +109,34 @@ pub async fn handle_user_message(state: DaemonState, session: SessionState, text
         session: session.clone(),
     };
 
+    let mut saw_finished = false;
     loop {
         let frame_with_raw = cpu.read_up().await?;
         match frame_with_raw {
-            None => break,
-            Some((UpFrame::Finished, _)) => break,
+            None => {
+                // cpu's stdout closed. If we never saw a `finished` frame, this
+                // is a fatal (most commonly: missing ANTHROPIC_API_KEY, bad
+                // binary, etc.). Surface the stderr tail so the TUI shows the
+                // real cause instead of just hanging silently.
+                if !saw_finished {
+                    let tail = cpu.stderr_tail();
+                    let trimmed = tail.trim();
+                    let message = if trimmed.is_empty() {
+                        "cpu exited without emitting any frame and produced no stderr; check ~/.arnold/arnoldd.err".to_string()
+                    } else {
+                        format!("cpu exited unexpectedly. stderr tail:\n{trimmed}")
+                    };
+                    let _ = session.client.send(DaemonEvent::Error {
+                        session_id: Some(session.session_id),
+                        message,
+                    });
+                }
+                break;
+            }
+            Some((UpFrame::Finished, _)) => {
+                saw_finished = true;
+                break;
+            }
             Some((UpFrame::Usage { provider, model, estimated_cost_usd, actual_cost_usd, .. }, _)) => {
                 match state.usage.record(session.session_id, provider, model, estimated_cost_usd, actual_cost_usd) {
                     Ok(Some(tc)) => {
