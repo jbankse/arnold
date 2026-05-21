@@ -54,6 +54,7 @@ impl DaemonState {
 
     pub async fn open(&self, cwd: PathBuf, client: ClientSender) -> Uuid {
         let id = Uuid::new_v4();
+        tracing::info!(session = %id, cwd = %cwd.display(), "session opened; cwd auto-allowlisted for this session");
         self.sessions.lock().await.insert(id, SessionState { session_id: id, cwd, client });
         id
     }
@@ -92,8 +93,14 @@ pub async fn handle_user_message(state: DaemonState, session: SessionState, text
     cpu.send_plan(plan).await?;
     cpu.send_step().await?;
 
+    // Per-session jail: take the daemon-wide roots + add this session's cwd. This is
+    // what lets `arnold` Just Work from any shell directory — the TUI sends its cwd in
+    // OpenSession and the daemon auto-allowlists it for the session's lifetime. The cwd
+    // is trusted because it comes from the local UDS client (which is the user).
+    let mut session_jail = (*state.jail).clone();
+    session_jail.add_root(session.cwd.clone());
     let ctx = HandlerContext {
-        jail: state.jail.clone(),
+        jail: Arc::new(session_jail),
         memory: state.memory.clone(),
         jobs: state.jobs.clone(),
         bios_binary: state.config.bios_binary.clone(),
