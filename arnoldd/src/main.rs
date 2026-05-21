@@ -49,6 +49,7 @@ async fn main() -> Result<()> {
     let arnold_dir = ArnoldConfig::arnold_dir()?;
     let sock_path = ArnoldConfig::socket_path()?;
     let inbox = Inbox::open(&arnold_dir.join("inbox.db"))?;
+    let jobs = jobs::JobTable::attach(inbox.connection())?;
     let memory = MemoryStore::open(&arnold_dir.join("memory"))?;
     let mut jail_roots = vec![arnold_dir.join("workspace")];
     jail_roots.extend(config.allowed_dirs.iter().cloned());
@@ -63,7 +64,7 @@ async fn main() -> Result<()> {
     }
     let jail = Jail::new(jail_roots);
 
-    let state = DaemonState::new(config, jail, memory);
+    let state = DaemonState::new(config, jail, memory, jobs, arnold_dir.clone());
 
     info!(socket = %sock_path.display(), "arnoldd starting");
     let listener = uds_server::bind(&sock_path).await?;

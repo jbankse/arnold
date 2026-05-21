@@ -37,19 +37,29 @@ pub async fn web_fetch(_ctx: &HandlerContext, url: String) -> Result<Value> {
 mod tests {
     use super::*;
     use crate::jail::Jail;
+    use crate::jobs::JobTable;
     use crate::memory::MemoryStore;
     use crate::session::SessionState;
-    use std::sync::Arc;
+    use rusqlite::Connection;
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
     use tokio::sync::mpsc;
     use uuid::Uuid;
 
     fn ctx(root: &std::path::Path) -> HandlerContext {
         let (tx, _rx) = mpsc::unbounded_channel();
+        let conn = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+        let jobs = JobTable::attach(conn).unwrap();
+        let client = tx.clone();
         HandlerContext {
             jail: Arc::new(Jail::new(vec![root.to_path_buf()])),
             memory: Arc::new(MemoryStore::open(&root.join("mem")).unwrap()),
+            jobs,
+            bios_binary: root.join("bios"),
+            runtime_image: "runtime/os:local".to_string(),
+            arnold_dir: root.to_path_buf(),
             session: SessionState { session_id: Uuid::nil(), cwd: root.to_path_buf(), client: tx },
+            client,
         }
     }
 

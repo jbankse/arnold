@@ -27,16 +27,26 @@ pub struct DaemonState {
     pub config: Arc<ArnoldConfig>,
     pub jail: Arc<Jail>,
     pub memory: Arc<MemoryStore>,
+    pub jobs: crate::jobs::JobTable,
+    pub arnold_dir: Arc<std::path::PathBuf>,
     pub sessions: Arc<Mutex<HashMap<Uuid, SessionState>>>,
     pub usage: crate::usage_meter::UsageMeter,
 }
 
 impl DaemonState {
-    pub fn new(config: ArnoldConfig, jail: Jail, memory: MemoryStore) -> Self {
+    pub fn new(
+        config: ArnoldConfig,
+        jail: Jail,
+        memory: MemoryStore,
+        jobs: crate::jobs::JobTable,
+        arnold_dir: std::path::PathBuf,
+    ) -> Self {
         Self {
             config: Arc::new(config),
             jail: Arc::new(jail),
             memory: Arc::new(memory),
+            jobs,
+            arnold_dir: Arc::new(arnold_dir),
             sessions: Arc::new(Mutex::new(HashMap::new())),
             usage: crate::usage_meter::UsageMeter::default(),
         }
@@ -85,7 +95,12 @@ pub async fn handle_user_message(state: DaemonState, session: SessionState, text
     let ctx = HandlerContext {
         jail: state.jail.clone(),
         memory: state.memory.clone(),
+        jobs: state.jobs.clone(),
+        bios_binary: state.config.bios_binary.clone(),
+        runtime_image: state.config.runtime_image.clone(),
+        arnold_dir: (*state.arnold_dir).clone(),
         session: session.clone(),
+        client: session.client.clone(),
     };
 
     loop {

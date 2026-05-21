@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 pub struct ArnoldConfig {
     /// Path to the 439 cpu binary. Defaults to ~/.arnold/bin/cpu
     pub cpu_binary: PathBuf,
+    /// Path to the bios binary. Defaults to ~/.arnold/bin/bios
+    pub bios_binary: PathBuf,
+    /// Container image reference used by bios for the runtime environment.
+    pub runtime_image: String,
     /// LLM provider (anthropic, openai, etc.)
     pub llm_provider: String,
     /// Model identifier
@@ -18,6 +22,8 @@ impl Default for ArnoldConfig {
         let home = dirs::home_dir().expect("no home dir");
         Self {
             cpu_binary: home.join(".arnold/bin/cpu"),
+            bios_binary: home.join(".arnold/bin/bios"),
+            runtime_image: "runtime/os:local".to_string(),
             llm_provider: "anthropic".to_string(),
             model: "claude-sonnet-4-6".to_string(),
             allowed_dirs: vec![],
