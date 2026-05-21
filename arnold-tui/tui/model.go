@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/google/uuid"
 
 	"github.com/jbankse/arnold/arnold-tui/client"
@@ -203,16 +204,41 @@ func (m *Model) Run(_ context.Context) error {
 	return err
 }
 
+var (
+	paneFocused   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("214"))
+	paneUnfocused = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240"))
+)
+
+func paneBox(title, body string, width, height int, focused bool) string {
+	style := paneUnfocused
+	if focused {
+		style = paneFocused
+	}
+	style = style.Width(width - 2).Height(height - 2)
+	header := lipgloss.NewStyle().Bold(true).Render(" " + title + " ")
+	return style.Render(header + "\n" + body)
+}
+
 func (m *Model) View() string {
 	if m.helpOpen {
 		return renderHelp()
 	}
-	return fmt.Sprintf("arnold tui (focus=%s, mode=%d, conn=%d, sid=%v)\n%d messages | %d events | %d jobs\n[i] insert  [tab] switch pane  [?] help  [q] quit\n",
-		m.focus, m.mode, m.connState, m.sessionID,
-		len(m.conversation), len(m.inboxEvents), len(m.jobs),
-	)
-}
+	if m.width == 0 || m.height == 0 {
+		return "initializing..."
+	}
 
-func renderHelp() string {
-	return "Help: see Task 18 for the real help screen\n"
+	// Vertical stack: conversation (50%), inbox (20%), jobs (25%), status (1 line).
+	usableH := m.height - 1 // reserve for status bar
+	convH := usableH * 50 / 100
+	inboxH := usableH * 20 / 100
+	jobsH := usableH - convH - inboxH
+
+	w := m.width
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		m.renderConversation(w, convH),
+		m.renderInbox(w, inboxH),
+		m.renderJobs(w, jobsH),
+		m.renderStatusBar(w),
+	)
 }
