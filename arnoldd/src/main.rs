@@ -15,7 +15,9 @@ use anyhow::Result;
 use tracing::{info, error};
 use config::ArnoldConfig;
 use inbox::Inbox;
-use session::SessionRegistry;
+use jail::Jail;
+use memory::MemoryStore;
+use session::DaemonState;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -24,17 +26,24 @@ async fn main() -> Result<()> {
             .add_directive("arnoldd=info".parse()?))
         .init();
 
-    let _config = ArnoldConfig::load_or_default()?;
+    let config = ArnoldConfig::load_or_default()?;
+    let arnold_dir = ArnoldConfig::arnold_dir()?;
     let sock_path = ArnoldConfig::socket_path()?;
-    let inbox = Inbox::open(&ArnoldConfig::arnold_dir()?.join("inbox.db"))?;
-    let sessions = SessionRegistry::default();
+    let inbox = Inbox::open(&arnold_dir.join("inbox.db"))?;
+    let memory = MemoryStore::open(&arnold_dir.join("memory"))?;
+    let mut jail_roots = vec![arnold_dir.join("workspace")];
+    jail_roots.extend(config.allowed_dirs.iter().cloned());
+    std::fs::create_dir_all(&jail_roots[0])?;
+    let jail = Jail::new(jail_roots);
+
+    let state = DaemonState::new(config, jail, memory);
 
     info!(socket = %sock_path.display(), "arnoldd starting");
     let listener = uds_server::bind(&sock_path).await?;
 
     loop {
         let (stream, _) = listener.accept().await?;
-        let s = sessions.clone();
+        let s = state.clone();
         let i = inbox.clone();
         tokio::spawn(async move {
             if let Err(e) = uds_server::handle_connection(stream, s, i).await {
