@@ -86,20 +86,22 @@ pub async fn spawn_and_drive(
         buf
     });
 
-    let status = child.wait().await.map_err(|e| anyhow!("waiting on bios: {e}"))?;
+    let status = match child.wait().await {
+        Ok(s) => s,
+        Err(e) => {
+            // Don't leak a Running row into the active index. Mark Failed
+            // with the wait diagnostic so the TUI shows the job as finished.
+            let message = format!("lost child handle while waiting on bios: {e}");
+            let _ = table.finalize(job_id, JobStatus::Failed, None, None, &message);
+            return Err(anyhow!("waiting on bios: {e}"));
+        }
+    };
     let _ = log_task.await;
     let stderr_tail = stderr_task.await.unwrap_or_default();
 
     let exit_code = status.code();
     let succeeded = status.success();
     let final_status = if succeeded { JobStatus::Completed } else { JobStatus::Failed };
-
-    // Transition to "exporting" briefly so the TUI shows the export step,
-    // then to the terminal status. (Real bios export happens during its own
-    // run; this is purely a UX heartbeat for v0b.)
-    if succeeded {
-        let _ = table.update_status(job_id, JobStatus::Exporting, Some("bios exported workspace"));
-    }
 
     let exported_path_str = if succeeded {
         export_path.to_str().map(String::from)
@@ -136,9 +138,15 @@ pub struct JobOutcome {
 /// ~/.arnold/bin/bios, then `which bios`.
 pub fn resolve_bios_binary(config_bios_path: Option<&Path>, arnold_dir: &Path) -> Result<PathBuf> {
     if let Some(p) = config_bios_path {
+        // Explicit config: trust it or surface the typo. Don't silently fall
+        // back — the user asked for THIS binary.
         if p.exists() {
             return Ok(p.to_path_buf());
         }
+        return Err(anyhow!(
+            "configured bios_binary does not exist: {} (fix or remove the override)",
+            p.display(),
+        ));
     }
     let candidate = arnold_dir.join("bin").join("bios");
     if candidate.exists() {
