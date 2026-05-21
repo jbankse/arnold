@@ -11,9 +11,18 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 pub enum UpFrame {
     Syscall { id: u64, method: String, params: Value },
     Finished,
-    /// Catch-all for any frame type the v0a daemon doesn't directly handle
-    /// (usage, archive_l2, etc.). The session loop pattern-matches the inner
-    /// frame to surface provider_error to the user as a DaemonEvent::Error.
+    Usage {
+        #[serde(default)] provider: String,
+        #[serde(default)] model: String,
+        #[serde(default)] input_tokens: u64,
+        #[serde(default)] output_tokens: u64,
+        #[serde(default)] total_tokens: u64,
+        #[serde(default)] estimated_cost_usd: Option<f64>,
+        #[serde(default)] actual_cost_usd: Option<f64>,
+    },
+    /// Catch-all for any frame type the daemon doesn't directly handle
+    /// (archive_l2, provider_error, etc.). The session loop pattern-matches
+    /// the raw Value to surface provider_error as DaemonEvent::Error.
     #[serde(other)]
     Other,
 }

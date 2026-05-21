@@ -10,6 +10,7 @@ mod plan_frame;
 mod schema;
 mod session;
 mod syscall;
+mod usage_meter;
 mod uds_server;
 
 use anyhow::Result;

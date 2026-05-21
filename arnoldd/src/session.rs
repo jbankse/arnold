@@ -90,6 +90,7 @@ pub async fn handle_user_message(state: DaemonState, session: SessionState, text
         match frame_with_raw {
             None => break,
             Some((UpFrame::Finished, _)) => break,
+            Some((UpFrame::Usage { .. }, _)) => { continue; }
             Some((UpFrame::Other, raw)) => {
                 // cpu emits provider_error frames when an LLM call fails terminally
                 // (bad auth, exhausted retry budget, refusal, etc.). v0a surfaces
