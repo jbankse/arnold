@@ -1,21 +1,26 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"os"
 
-	"github.com/jbankse/arnold/arnold-tui/wire"
+	"github.com/jbankse/arnold/arnold-tui/client"
+	"github.com/jbankse/arnold/arnold-tui/tui"
 )
 
 func main() {
-	// Smoke test: decode a known good frame.
-	sample := `{"type":"reply","session_id":"00000000-0000-0000-0000-000000000000","text":"hi"}`
-	ev, err := wire.DecodeEvent([]byte(sample))
+	ctx := context.Background()
+	cli, err := client.Dial(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "decode failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
-	out, _ := json.MarshalIndent(ev, "", "  ")
-	fmt.Println(string(out))
+	defer cli.Close()
+
+	m := tui.New(cli)
+	if err := m.Run(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "tui error: %v\n", err)
+		os.Exit(1)
+	}
 }
