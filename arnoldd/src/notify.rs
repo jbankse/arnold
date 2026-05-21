@@ -10,7 +10,7 @@ use tokio::process::Command;
 /// The `urgency` parameter is a freeform string with defined values:
 /// "low" | "normal" | "critical" (matching freedesktop standards). macOS
 /// ignores urgency; Linux passes it through to notify-send.
-pub async fn dispatch(title: &str, body: &str, _urgency: Option<&str>) -> Result<()> {
+pub async fn dispatch(title: &str, body: &str, urgency: Option<&str>) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         let script = format!(
@@ -36,7 +36,7 @@ pub async fn dispatch(title: &str, body: &str, _urgency: Option<&str>) -> Result
     #[cfg(target_os = "linux")]
     {
         let mut cmd = Command::new("notify-send");
-        if let Some(u) = _urgency {
+        if let Some(u) = urgency {
             cmd.arg("--urgency").arg(u);
         }
         cmd.arg(title).arg(body)
@@ -53,7 +53,10 @@ pub async fn dispatch(title: &str, body: &str, _urgency: Option<&str>) -> Result
     }
 
     #[allow(unreachable_code)]
-    Err(anyhow!("OS notifications are only supported on macOS and Linux in v0b"))
+    {
+        let _ = urgency;
+        Err(anyhow!("OS notifications are only supported on macOS and Linux in v0b"))
+    }
 }
 
 #[cfg(target_os = "macos")]
