@@ -31,19 +31,23 @@ pub enum DaemonEvent {
     JobSpawned {
         session_id: Uuid,
         job_id: Uuid,
+        /// Truncated preview of the LLM-supplied prompt; daemon trims to ~80 chars.
         prompt_preview: String,
     },
     /// Heartbeat update for an in-flight 439 job.
     JobUpdate {
         session_id: Uuid,
         job_id: Uuid,
+        /// Closed set: `queued | running | exporting | completed | failed | cancelled`.
         status: String,
+        /// Most recent BIOS stdout line for liveness; `None` if no output yet.
         last_log_line: Option<String>,
     },
     /// Terminal event for a 439 job.
     JobCompleted {
         session_id: Uuid,
         job_id: Uuid,
+        /// Closed set: `queued | running | exporting | completed | failed | cancelled`.
         status: String,
         exit_code: Option<i32>,
         exported_workspace: Option<String>,
@@ -62,6 +66,7 @@ pub enum DaemonEvent {
         session_id: Uuid,
         title: String,
         body: String,
+        /// Closed set: `low | normal | critical`.
         urgency: String,
     },
 }
@@ -125,6 +130,7 @@ mod tests {
 
     #[test]
     fn cost_update_round_trip() {
+        // Values chosen to round-trip exactly through JSON (no f64 precision loss).
         let ev = DaemonEvent::CostUpdate {
             session_id: Uuid::nil(),
             session_cost_usd: 0.0123,
