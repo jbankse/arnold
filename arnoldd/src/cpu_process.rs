@@ -54,16 +54,22 @@ impl CpuProcess {
         provider: &str,
         model: &str,
         task_id: String,
+        extra_env: &[(String, String)],
     ) -> Result<Self> {
-        // Note: provider API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) flow via
-        // parent-process env inheritance (tokio::process::Command does not env_clear by default).
-        let mut child = Command::new(binary)
-            .env("AGENT_LLM_PROVIDER", provider)
+        // Note: provider API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) come from
+        // `extra_env` (sourced from ~/.arnold/secrets.toml at the caller). Parent-process
+        // env still inherits — extra_env overrides anything already in the env.
+        let mut cmd = Command::new(binary);
+        cmd.env("AGENT_LLM_PROVIDER", provider)
             .env("AGENT_MODEL", model)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
+            .kill_on_drop(true);
+        for (k, v) in extra_env {
+            cmd.env(k, v);
+        }
+        let mut child = cmd
             .spawn()
             .map_err(|e| anyhow!("failed to spawn cpu at {}: {e}", binary.display()))?;
         let stdin = child.stdin.take().ok_or_else(|| anyhow!("no stdin on cpu"))?;

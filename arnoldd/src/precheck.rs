@@ -5,17 +5,22 @@ use uuid::Uuid;
 use crate::config::ArnoldConfig;
 use crate::cpu_process::{CpuProcess, UpFrame};
 use crate::plan_frame::PlanFrameBuilder;
+use crate::secrets::Secrets;
 
 /// Pre-flight a cpu spawn. Spawns the binary, sends a minimal plan frame, then
 /// expects cpu to either emit a syscall (which we error-back so cpu exits) or
 /// finished. Returns Ok if cpu came up and shut down cleanly.
 pub async fn run(config: &ArnoldConfig) -> Result<String> {
     let task_id = Uuid::new_v4();
+    // Load secrets so --check sees the same API keys live arnoldd uses.
+    let secrets_path = Secrets::default_path()?;
+    let extra_env = Secrets::load(&secrets_path)?.as_env_pairs();
     let mut cpu = CpuProcess::spawn(
         &config.cpu_binary,
         &config.llm_provider,
         &config.model,
         task_id.to_string(),
+        &extra_env,
     ).await.map_err(|e| anyhow!("failed to spawn cpu: {e}"))?;
 
     let context = "PROJECT_ROOT: /tmp\nPATH_MODE: project-relative\n\nUSER:\nprecheck\n".to_string();

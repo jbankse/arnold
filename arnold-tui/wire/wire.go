@@ -9,10 +9,14 @@ import (
 // ClientRequest is the tagged union sent from CLI to daemon.
 // Mirrors arnold-wire/src/lib.rs's ClientRequest enum with snake_case tags.
 type ClientRequest struct {
-	Type      string     `json:"type"` // one of: open_session, user_message, close_session, ping
+	Type      string     `json:"type"` // one of: open_session, user_message, close_session, ping, set_provider_key, get_secrets_status
 	Cwd       string     `json:"cwd,omitempty"`
 	SessionID *uuid.UUID `json:"session_id,omitempty"`
 	Text      string     `json:"text,omitempty"`
+
+	// SetProviderKey
+	Provider string `json:"provider,omitempty"`
+	Key      string `json:"key,omitempty"`
 }
 
 // Constructors avoid stringly-typed Type fields at call sites.
@@ -28,6 +32,12 @@ func CloseSession(sessionID uuid.UUID) ClientRequest {
 }
 func Ping() ClientRequest {
 	return ClientRequest{Type: "ping"}
+}
+func SetProviderKey(provider, key string) ClientRequest {
+	return ClientRequest{Type: "set_provider_key", Provider: provider, Key: key}
+}
+func GetSecretsStatus() ClientRequest {
+	return ClientRequest{Type: "get_secrets_status"}
 }
 
 // DaemonEvent is the union from daemon to CLI. Type-tagged like ClientRequest.
@@ -57,6 +67,15 @@ type DaemonEvent struct {
 	Title   string `json:"title,omitempty"`
 	Body    string `json:"body,omitempty"`
 	Urgency string `json:"urgency,omitempty"`
+
+	// SecretsStatus
+	Providers []ProviderStatus `json:"providers,omitempty"`
+}
+
+// ProviderStatus mirrors arnold-wire's ProviderStatus struct.
+type ProviderStatus struct {
+	Provider   string `json:"provider"`
+	Configured bool   `json:"configured"`
 }
 
 // DecodeEvent reads one JSON-line frame.

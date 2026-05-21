@@ -59,6 +59,15 @@ type Model struct {
 	cost   CostState
 	width  int
 	height int
+
+	// Settings overlay (Ctrl+S). Holds the daemon-reported provider statuses
+	// (no key values are ever sent to the TUI) plus an in-flight edit buffer
+	// while the user is pasting a new key.
+	settingsOpen     bool
+	providerStatuses []wire.ProviderStatus
+	settingsCursor   int // 0..len(providerStatuses)-1
+	editingKey       bool
+	editBuffer       string
 }
 
 type CostState struct {
@@ -76,6 +85,13 @@ func New(cli *client.Client) *Model {
 		focus:     PaneConversation,
 		mode:      ModeNormal,
 		jobs:      make(map[string]*Job),
+		// Placeholder rows so the overlay isn't blank before GetSecretsStatus
+		// returns. Overwritten on first SecretsStatus event.
+		providerStatuses: []wire.ProviderStatus{
+			{Provider: "anthropic", Configured: false},
+			{Provider: "openai", Configured: false},
+			{Provider: "xai", Configured: false},
+		},
 	}
 }
 
@@ -106,6 +122,10 @@ func (m *Model) Init() tea.Cmd {
 		// Defer the error to a tea.Msg
 		return func() tea.Msg { return daemonClosedMsg{} }
 	}
+	// Ask the daemon which provider keys are set so the Ctrl+S overlay has
+	// real data on first open. Error is non-fatal — the overlay falls back
+	// to the placeholder rows from New().
+	_ = m.cli.Send(wire.GetSecretsStatus())
 	return m.listenForEvents()
 }
 
@@ -183,6 +203,13 @@ func (m *Model) applyEvent(ev wire.DaemonEvent) {
 		}
 	case "notification":
 		m.inboxEvents = append(m.inboxEvents, "[notify] "+ev.Title+": "+ev.Body)
+	case "secrets_status":
+		if len(ev.Providers) > 0 {
+			m.providerStatuses = ev.Providers
+			if m.settingsCursor >= len(m.providerStatuses) {
+				m.settingsCursor = 0
+			}
+		}
 	}
 }
 
@@ -220,6 +247,9 @@ func paneBox(title, body string, width, height int, focused bool) string {
 }
 
 func (m *Model) View() string {
+	if m.settingsOpen {
+		return m.renderSettings()
+	}
 	if m.helpOpen {
 		return renderHelp()
 	}

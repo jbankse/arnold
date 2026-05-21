@@ -11,6 +11,7 @@ mod notify;
 mod plan_frame;
 mod precheck;
 mod schema;
+mod secrets;
 mod session;
 mod syscall;
 mod uds_server;
@@ -65,7 +66,25 @@ async fn main() -> Result<()> {
     }
     let jail = Jail::new(jail_roots);
 
-    let state = DaemonState::new(config, jail, memory, jobs, arnold_dir.clone());
+    let secrets_path = arnold_dir.join("secrets.toml");
+    let loaded_secrets = match secrets::Secrets::load(&secrets_path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("could not load {}: {e}; starting with empty secrets", secrets_path.display());
+            secrets::Secrets::default()
+        }
+    };
+    let env_count = loaded_secrets.as_env_pairs().len();
+    if env_count == 0 {
+        tracing::warn!(
+            "no provider API keys configured; cpu turns will fatal until you set one (use the TUI's Ctrl+S settings, or edit {} directly)",
+            secrets_path.display(),
+        );
+    } else {
+        info!("loaded {env_count} provider key(s) from {}", secrets_path.display());
+    }
+
+    let state = DaemonState::new(config, jail, memory, jobs, arnold_dir.clone(), loaded_secrets);
 
     info!(socket = %sock_path.display(), "arnoldd starting");
     let listener = uds_server::bind(&sock_path).await?;

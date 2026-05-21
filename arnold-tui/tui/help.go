@@ -15,12 +15,18 @@ Normal mode:
   tab         next pane
   shift+tab   previous pane
   ?           toggle this help
+  ctrl+s      API key settings (set Anthropic/OpenAI/xAI keys)
   q / ctrl+c  quit
 
 Insert mode:
   esc         back to normal
   enter       send the message
   backspace   erase one char
+
+Settings (Ctrl+S):
+  j / k       move cursor between providers
+  enter       edit the highlighted provider's key
+  esc         leave edit mode / close overlay
 
 Panes:
   conversation  you ↔ arnold

@@ -13,6 +13,15 @@ pub enum ClientRequest {
     CloseSession { session_id: Uuid },
     /// Lightweight health check.
     Ping,
+    /// Set or clear an LLM provider API key. `provider` is the short name
+    /// (`anthropic`, `openai`, `xai`, …). Empty `key` clears the entry.
+    /// The daemon persists to ~/.arnold/secrets.toml (chmod 600) and picks up
+    /// the new value on the next cpu spawn — no daemon restart needed.
+    SetProviderKey { provider: String, key: String },
+    /// Ask the daemon which provider keys are currently set. Returns a
+    /// SecretsStatus event listing each provider and whether its key is
+    /// non-empty (the actual key value is never sent back over the wire).
+    GetSecretsStatus,
 }
 
 /// Daemon → Client: anything the daemon can push back.
@@ -69,6 +78,16 @@ pub enum DaemonEvent {
         /// Closed set: `low | normal | critical`.
         urgency: String,
     },
+    /// Response to GetSecretsStatus or SetProviderKey. Lists each provider
+    /// the daemon knows about and whether its key is non-empty. Values are
+    /// never echoed back — the TUI only needs to render "set" vs "not set".
+    SecretsStatus { providers: Vec<ProviderStatus> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProviderStatus {
+    pub provider: String,
+    pub configured: bool,
 }
 
 #[cfg(test)]
@@ -156,5 +175,28 @@ mod tests {
         let parsed: DaemonEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(ev, parsed);
         assert!(json.contains("\"type\":\"notification\""));
+    }
+
+    #[test]
+    fn set_provider_key_round_trip() {
+        let req = ClientRequest::SetProviderKey { provider: "anthropic".into(), key: "sk-x".into() };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"type\":\"set_provider_key\""));
+        let back: ClientRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[test]
+    fn secrets_status_round_trip() {
+        let ev = DaemonEvent::SecretsStatus {
+            providers: vec![
+                ProviderStatus { provider: "anthropic".into(), configured: true },
+                ProviderStatus { provider: "openai".into(), configured: false },
+            ],
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("\"type\":\"secrets_status\""));
+        let back: DaemonEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, back);
     }
 }

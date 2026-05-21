@@ -31,6 +31,10 @@ pub struct DaemonState {
     pub arnold_dir: std::path::PathBuf,
     pub sessions: Arc<Mutex<HashMap<Uuid, SessionState>>>,
     pub usage: crate::usage_meter::UsageMeter,
+    /// Provider API keys, read at startup and mutable via SetProviderKey.
+    /// RwLock so reads (per cpu spawn) don't block other reads; writes (TUI
+    /// settings overlay) are rare.
+    pub secrets: Arc<tokio::sync::RwLock<crate::secrets::Secrets>>,
 }
 
 impl DaemonState {
@@ -40,6 +44,7 @@ impl DaemonState {
         memory: MemoryStore,
         jobs: crate::jobs::JobTable,
         arnold_dir: std::path::PathBuf,
+        secrets: crate::secrets::Secrets,
     ) -> Self {
         Self {
             config: Arc::new(config),
@@ -49,6 +54,7 @@ impl DaemonState {
             arnold_dir,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             usage: crate::usage_meter::UsageMeter::default(),
+            secrets: Arc::new(tokio::sync::RwLock::new(secrets)),
         }
     }
 
@@ -72,11 +78,16 @@ impl DaemonState {
 /// Drive one user-message turn end-to-end.
 pub async fn handle_user_message(state: DaemonState, session: SessionState, text: String) -> Result<()> {
     let task_id = Uuid::new_v4();
+    let extra_env = {
+        let s = state.secrets.read().await;
+        s.as_env_pairs()
+    };
     let mut cpu = CpuProcess::spawn(
         &state.config.cpu_binary,
         &state.config.llm_provider,
         &state.config.model,
         task_id.to_string(),
+        &extra_env,
     ).await?;
 
     let context = format!(
