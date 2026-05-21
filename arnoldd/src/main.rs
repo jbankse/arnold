@@ -7,6 +7,7 @@ mod inbox;
 mod jail;
 mod jobs;
 mod memory;
+mod notify;
 mod plan_frame;
 mod precheck;
 mod schema;
