@@ -82,6 +82,11 @@ func (m *Model) rootKeybindings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.input = m.input[:len(m.input)-1]
 			}
 			return m, nil
+		case tea.KeySpace:
+			// bubbletea routes space through KeySpace, not KeyRunes — without
+			// this case, hitting space silently does nothing.
+			m.input += " "
+			return m, nil
 		default:
 			if msg.Type == tea.KeyRunes {
 				m.input += string(msg.Runes)
@@ -139,6 +144,9 @@ func (m *Model) settingsKeybindings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if len(m.editBuffer) > 0 {
 				m.editBuffer = m.editBuffer[:len(m.editBuffer)-1]
 			}
+			return m, nil
+		case tea.KeySpace:
+			m.editBuffer += " "
 			return m, nil
 		default:
 			if msg.Type == tea.KeyRunes {

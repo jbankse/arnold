@@ -15,9 +15,13 @@ pub enum UpFrame {
     Usage {
         #[serde(default)] provider: String,
         #[serde(default)] model: String,
-        #[serde(default)] input_tokens: u64,
-        #[serde(default)] output_tokens: u64,
-        #[serde(default)] total_tokens: u64,
+        // cpu emits these as JSON numbers that may be integer (18) OR float
+        // (18.0) — confirmed in the wild. f64 accepts both shapes; the values
+        // are currently informational only (UsageMeter consumes cost_usd, not
+        // tokens), so the precision loss vs. u64 is irrelevant.
+        #[serde(default)] input_tokens: f64,
+        #[serde(default)] output_tokens: f64,
+        #[serde(default)] total_tokens: f64,
         #[serde(default)] estimated_cost_usd: Option<f64>,
         #[serde(default)] actual_cost_usd: Option<f64>,
     },
