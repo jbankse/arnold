@@ -28,7 +28,7 @@ pub struct DaemonState {
     pub jail: Arc<Jail>,
     pub memory: Arc<MemoryStore>,
     pub jobs: crate::jobs::JobTable,
-    pub arnold_dir: Arc<std::path::PathBuf>,
+    pub arnold_dir: std::path::PathBuf,
     pub sessions: Arc<Mutex<HashMap<Uuid, SessionState>>>,
     pub usage: crate::usage_meter::UsageMeter,
 }
@@ -46,7 +46,7 @@ impl DaemonState {
             jail: Arc::new(jail),
             memory: Arc::new(memory),
             jobs,
-            arnold_dir: Arc::new(arnold_dir),
+            arnold_dir,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             usage: crate::usage_meter::UsageMeter::default(),
         }
@@ -98,9 +98,8 @@ pub async fn handle_user_message(state: DaemonState, session: SessionState, text
         jobs: state.jobs.clone(),
         bios_binary: state.config.bios_binary.clone(),
         runtime_image: state.config.runtime_image.clone(),
-        arnold_dir: (*state.arnold_dir).clone(),
+        arnold_dir: state.arnold_dir.clone(),
         session: session.clone(),
-        client: session.client.clone(),
     };
 
     loop {

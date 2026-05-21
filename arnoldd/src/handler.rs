@@ -6,7 +6,7 @@ use crate::syscall::Syscall;
 use crate::jail::Jail;
 use crate::jobs::JobTable;
 use crate::memory::MemoryStore;
-use crate::session::{ClientSender, SessionState};
+use crate::session::SessionState;
 
 pub struct HandlerContext {
     pub jail: Arc<Jail>,
@@ -16,9 +16,6 @@ pub struct HandlerContext {
     pub runtime_image: String,
     pub arnold_dir: PathBuf,
     pub session: SessionState,
-    /// Cloned sender so async background tasks (e.g. bios driver) can push
-    /// JobCompleted events without owning the session.
-    pub client: ClientSender,
 }
 
 pub async fn dispatch(ctx: &HandlerContext, syscall: Syscall) -> Result<Value> {

@@ -22,7 +22,7 @@ pub async fn spin_up_439(
     // Immediately push JobSpawned to the client so the TUI's jobs pane
     // shows the new row before we even start bios.
     let preview: String = prompt.chars().take(80).collect();
-    let _ = ctx.client.send(DaemonEvent::JobSpawned {
+    let _ = ctx.session.client.send(DaemonEvent::JobSpawned {
         session_id: ctx.session.session_id,
         job_id,
         prompt_preview: preview,
@@ -35,7 +35,7 @@ pub async fn spin_up_439(
     let bios_binary = ctx.bios_binary.clone();
     let runtime_image = ctx.runtime_image.clone();
     let arnold_dir = ctx.arnold_dir.clone();
-    let client = ctx.client.clone();
+    let client = ctx.session.client.clone();
     let session_id = ctx.session.session_id;
     let pack_kind_clone = pack_kind.clone();
 
@@ -76,7 +76,7 @@ pub async fn spin_up_439(
         }
     });
 
-    Ok(json!({ "job_id": job_id.to_string(), "status": "running" }))
+    Ok(json!({ "job_id": job_id.to_string(), "status": "queued" }))
 }
 
 pub async fn poll_job(ctx: &HandlerContext, job_id: String) -> Result<Value> {

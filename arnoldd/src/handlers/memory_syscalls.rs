@@ -55,7 +55,6 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel();
         let conn = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
         let jobs = JobTable::attach(conn).unwrap();
-        let client = tx.clone();
         HandlerContext {
             jail: Arc::new(Jail::new(vec![root.to_path_buf()])),
             memory: Arc::new(MemoryStore::open(&root.join("mem")).unwrap()),
@@ -64,7 +63,6 @@ mod tests {
             runtime_image: "runtime/os:local".to_string(),
             arnold_dir: root.to_path_buf(),
             session: SessionState { session_id: Uuid::nil(), cwd: root.to_path_buf(), client: tx },
-            client,
         }
     }
 
