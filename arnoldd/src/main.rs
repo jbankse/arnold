@@ -1,5 +1,6 @@
 mod config;
 mod inbox;
+mod jail;
 mod memory;
 mod session;
 mod uds_server;
