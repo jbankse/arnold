@@ -1,0 +1,33 @@
+use anyhow::Result;
+use serde_json::Value;
+use std::sync::Arc;
+use crate::syscall::Syscall;
+use crate::jail::Jail;
+use crate::memory::MemoryStore;
+use crate::session::SessionState;
+
+pub struct HandlerContext {
+    pub jail: Arc<Jail>,
+    pub memory: Arc<MemoryStore>,
+    pub session: SessionState,
+}
+
+pub async fn dispatch(ctx: &HandlerContext, syscall: Syscall) -> Result<Value> {
+    use Syscall::*;
+    match syscall {
+        Reply { text } => crate::handlers::lifecycle::reply(ctx, text).await,
+        Done {} => crate::handlers::lifecycle::done(ctx).await,
+        ReadFile { path } => crate::handlers::file::read_file(ctx, path).await,
+        WriteFile { path, contents } => crate::handlers::file::write_file(ctx, path, contents).await,
+        ReplaceInFile { path, old_string, new_string } =>
+            crate::handlers::file::replace_in_file(ctx, path, old_string, new_string).await,
+        ListDir { path } => crate::handlers::file::list_dir(ctx, path).await,
+        Search { query, path, glob } => crate::handlers::file::search(ctx, query, path, glob).await,
+        RunCommand { cmd, args, cwd, timeout_ms, stdin } =>
+            crate::handlers::shell::run_command(ctx, cmd, args, cwd, timeout_ms, stdin).await,
+        WebFetch { url } => crate::handlers::web::web_fetch(ctx, url).await,
+        MemoryRead { topic } => crate::handlers::memory_syscalls::memory_read(ctx, topic).await,
+        MemoryWrite { topic, content } => crate::handlers::memory_syscalls::memory_write(ctx, topic, content).await,
+        MemoryList {} => crate::handlers::memory_syscalls::memory_list(ctx).await,
+    }
+}
