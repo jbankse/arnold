@@ -1,6 +1,19 @@
 use anyhow::Result;
-use serde_json::Value;
+use arnold_wire::DaemonEvent;
+use serde_json::{json, Value};
 use crate::handler::HandlerContext;
 
-pub async fn reply(_ctx: &HandlerContext, _text: String) -> Result<Value> { unimplemented!("Task 13") }
-pub async fn done(_ctx: &HandlerContext) -> Result<Value> { unimplemented!("Task 13") }
+pub async fn reply(ctx: &HandlerContext, text: String) -> Result<Value> {
+    let _ = ctx.session.client.send(DaemonEvent::Reply {
+        session_id: ctx.session.session_id,
+        text: text.clone(),
+    });
+    Ok(json!({"status": "delivered"}))
+}
+
+pub async fn done(ctx: &HandlerContext) -> Result<Value> {
+    let _ = ctx.session.client.send(DaemonEvent::TurnComplete {
+        session_id: ctx.session.session_id,
+    });
+    Ok(json!({"status": "turn_complete"}))
+}
