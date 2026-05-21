@@ -7,9 +7,20 @@ pub async fn web_fetch(_ctx: &HandlerContext, url: String) -> Result<Value> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err(anyhow::anyhow!("only http(s) URLs are allowed"));
     }
+    let redirect_policy = reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 3 {
+            return attempt.error("too many redirects (limit 3)");
+        }
+        let scheme = attempt.url().scheme().to_owned();
+        if scheme != "http" && scheme != "https" {
+            return attempt.error(format!("redirect to non-http(s) scheme '{scheme}' rejected"));
+        }
+        attempt.follow()
+    });
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .user_agent("Arnold/0.1 (+https://github.com/jbankse/Arnold)")
+        .redirect(redirect_policy)
         .build()?;
     let resp = client.get(&url).send().await?;
     let status = resp.status().as_u16();
@@ -18,7 +29,7 @@ pub async fn web_fetch(_ctx: &HandlerContext, url: String) -> Result<Value> {
     Ok(json!({
         "status": status,
         "body": truncated,
-        "body_truncated": body.len() > 16_000,
+        "body_truncated": body.chars().count() > 16_000,
     }))
 }
 
@@ -47,5 +58,12 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let c = ctx(tmp.path());
         assert!(web_fetch(&c, "file:///etc/passwd".into()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn rejects_unknown_scheme() {
+        let tmp = TempDir::new().unwrap();
+        let c = ctx(tmp.path());
+        assert!(web_fetch(&c, "javascript:alert(1)".into()).await.is_err());
     }
 }
