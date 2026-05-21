@@ -94,7 +94,7 @@ pub async fn handle_user_message(state: DaemonState, session: SessionState, text
             Some((UpFrame::Other, raw)) => {
                 // cpu emits provider_error frames when an LLM call fails terminally
                 // (bad auth, exhausted retry budget, refusal, etc.). v0a surfaces
-                // these to the user; everything else (usage, archive_l2) is ignored.
+                // these to the user; everything else (archive_l2, unknown frames) is ignored.
                 if raw.get("type").and_then(|v| v.as_str()) == Some("provider_error") {
                     let message = raw.get("message")
                         .and_then(|v| v.as_str())

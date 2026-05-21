@@ -36,8 +36,12 @@ impl UsageMeter {
         estimated: Option<f64>,
         actual: Option<f64>,
     ) -> Result<Option<TurnCost>> {
-        let last_turn = actual.or(estimated).unwrap_or(0.0);
-        if last_turn <= 0.0 && actual.is_none() && estimated.is_none() {
+        let last_turn = match (actual, estimated) {
+            (Some(a), _) => a,
+            (None, Some(e)) => e,
+            (None, None) => return Ok(None),
+        };
+        if last_turn <= 0.0 {
             return Ok(None);
         }
         let mut map = self.inner.lock().map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
@@ -112,5 +116,18 @@ mod tests {
         let new_sid = Uuid::new_v4();
         let t = m.record(new_sid, "anthropic".into(), "sonnet-4-6".into(), Some(0.02), None).unwrap().unwrap();
         assert_eq!(t.session_cost_usd, 0.02);
+    }
+
+    #[test]
+    fn sessions_accumulate_independently() {
+        let m = UsageMeter::default();
+        let s1 = Uuid::new_v4();
+        let s2 = Uuid::new_v4();
+        m.record(s1, "anthropic".into(), "sonnet-4-6".into(), Some(0.01), None).unwrap();
+        m.record(s2, "anthropic".into(), "sonnet-4-6".into(), Some(0.05), None).unwrap();
+        let t1 = m.record(s1, "anthropic".into(), "sonnet-4-6".into(), Some(0.02), None).unwrap().unwrap();
+        let t2 = m.record(s2, "anthropic".into(), "sonnet-4-6".into(), Some(0.03), None).unwrap().unwrap();
+        assert!((t1.session_cost_usd - 0.03).abs() < 1e-9, "s1 cumulative should be 0.03");
+        assert!((t2.session_cost_usd - 0.08).abs() < 1e-9, "s2 cumulative should be 0.08");
     }
 }
