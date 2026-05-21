@@ -34,11 +34,16 @@ impl Jail {
         // Try each root in order; resolve and check containment.
         for root in &self.roots {
             let candidate = root.join(p);
-            // Canonicalize parent so symlink escapes are caught.
-            let parent_canon = candidate.parent()
-                .map(|pp| pp.canonicalize().unwrap_or_else(|_| pp.to_path_buf()))
-                .unwrap_or_else(|| root.clone());
-            if parent_canon.starts_with(root) {
+            // If the candidate exists, canonicalize the WHOLE thing so a symlink leaf
+            // pointing outside the root is caught. If it doesn't exist (typical for
+            // writes), fall back to canonicalizing the parent.
+            let canon_for_check: PathBuf = match candidate.canonicalize() {
+                Ok(c) => c,
+                Err(_) => candidate.parent()
+                    .map(|pp| pp.canonicalize().unwrap_or_else(|_| pp.to_path_buf()))
+                    .unwrap_or_else(|| root.clone()),
+            };
+            if canon_for_check.starts_with(root) {
                 return Ok(candidate);
             }
         }
@@ -46,6 +51,13 @@ impl Jail {
     }
 
     pub fn validate_inside_any(&self, abs: &Path) -> Result<()> {
+        // Same structural guards as resolve() — reject any '..' or weird components
+        // even if the path doesn't exist yet (canonicalize would silently fall through).
+        for comp in abs.components() {
+            if matches!(comp, Component::ParentDir) {
+                return Err(anyhow!("path '{}' contains forbidden '..' component", abs.display()));
+            }
+        }
         let canon = abs.canonicalize().unwrap_or_else(|_| abs.to_path_buf());
         for root in &self.roots {
             if canon.starts_with(root) { return Ok(()); }
@@ -82,5 +94,32 @@ mod tests {
         let canon_root = tmp.path().canonicalize().unwrap_or_else(|_| tmp.path().to_path_buf());
         assert!(p.starts_with(&canon_root));
         assert!(p.ends_with("foo/bar.txt"));
+    }
+
+    #[test]
+    fn rejects_symlink_leaf_pointing_outside_root() {
+        let jail_root = TempDir::new().unwrap();
+        let outside_root = TempDir::new().unwrap();
+        let outside_target = outside_root.path().join("secret.txt");
+        std::fs::write(&outside_target, "leaked").unwrap();
+
+        // Create a symlink inside the jail that points to a file outside the jail.
+        let link_path = jail_root.path().join("escape");
+        std::os::unix::fs::symlink(&outside_target, &link_path).unwrap();
+
+        let jail = Jail::new(vec![jail_root.path().to_path_buf()]);
+        // resolve must NOT return a path that the caller could read to leak the outside file.
+        assert!(jail.resolve("escape").is_err(),
+            "resolve allowed a symlink leaf to escape the jail");
+    }
+
+    #[test]
+    fn validate_inside_any_rejects_parent_dir_in_nonexistent_path() {
+        let tmp = TempDir::new().unwrap();
+        let jail = Jail::new(vec![tmp.path().to_path_buf()]);
+        let abs = tmp.path().join("a/../../../etc/passwd");
+        // Path doesn't exist; canonicalize fails; old code accepted via literal starts_with.
+        assert!(jail.validate_inside_any(&abs).is_err(),
+            "validate_inside_any allowed a '..' component in a non-existent path");
     }
 }
