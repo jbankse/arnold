@@ -20,7 +20,11 @@ pub enum Syscall {
     #[serde(rename = "sys_list_dir")]
     ListDir { path: String },
     #[serde(rename = "sys_search")]
-    Search { query: String, path: Option<String>, glob: Option<String> },
+    Search {
+        query: String,
+        #[serde(default)] path: Option<String>,
+        #[serde(default)] glob: Option<String>,
+    },
 
     // Shell
     #[serde(rename = "sys_run_command")]
