@@ -8,9 +8,10 @@ use crate::handler::HandlerContext;
 pub async fn read_file(ctx: &HandlerContext, path: String) -> Result<Value> {
     let abs = ctx.jail.resolve(&path)?;
     let contents = tokio::fs::read_to_string(&abs).await?;
-    // Truncate to keep CPU context bounded
+    // Compare on the same unit (chars) to avoid byte/char mismatch on multi-byte UTF-8.
+    let was_truncated = contents.chars().count() > 8000;
     let truncated = contents.chars().take(8000).collect::<String>();
-    Ok(json!({"contents": truncated, "truncated": contents.len() > 8000}))
+    Ok(json!({"contents": truncated, "truncated": was_truncated}))
 }
 
 pub async fn write_file(ctx: &HandlerContext, path: String, contents: String) -> Result<Value> {
@@ -46,14 +47,22 @@ pub async fn list_dir(ctx: &HandlerContext, path: String) -> Result<Value> {
     let abs = ctx.jail.resolve(&path)?;
     let mut entries = vec![];
     let mut rd = tokio::fs::read_dir(&abs).await?;
+    let mut total_seen: usize = 0;
+    let mut truncated = false;
     while let Some(e) = rd.next_entry().await? {
+        total_seen += 1;
+        if entries.len() >= 200 {
+            truncated = true;
+            // Drain the rest so the iterator's resource is freed cleanly.
+            continue;
+        }
         let ft = e.file_type().await?;
         entries.push(json!({
             "name": e.file_name().to_string_lossy(),
             "is_dir": ft.is_dir(),
         }));
     }
-    Ok(json!({"entries": entries}))
+    Ok(json!({"entries": entries, "truncated": truncated, "total": total_seen}))
 }
 
 pub async fn search(
@@ -72,7 +81,8 @@ pub async fn search(
     cmd.arg(&query).arg(&search_path);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-    let mut child = cmd.spawn()?;
+    let mut child = cmd.spawn()
+        .map_err(|e| anyhow!("ripgrep (rg) not found on PATH or failed to spawn: {e}"))?;
     let mut out = String::new();
     if let Some(mut so) = child.stdout.take() {
         so.read_to_string(&mut out).await?;
@@ -134,5 +144,21 @@ mod tests {
         write_file(&c, "a.txt".into(), "foo bar foo".into()).await.unwrap();
         let err = replace_in_file(&c, "a.txt".into(), "foo".into(), "baz".into()).await;
         assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_dir_caps_entries_at_200() {
+        let tmp = TempDir::new().unwrap();
+        let c = ctx(tmp.path());
+        // Create 250 files in a sub-directory so the cap fires cleanly without
+        // the `mem/` dir created by MemoryStore::open polluting the count.
+        for i in 0..250 {
+            write_file(&c, format!("big/f{i}.txt"), "x".into()).await.unwrap();
+        }
+        let r = list_dir(&c, "big".into()).await.unwrap();
+        let entries = r["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 200, "list_dir should cap entries at 200");
+        assert_eq!(r["truncated"].as_bool(), Some(true));
+        assert_eq!(r["total"].as_u64(), Some(250));
     }
 }
