@@ -110,6 +110,12 @@ fn arnold_syscall_menu() -> Vec<SyscallSpec> {
             json!({"method":"sys_memory_write","params":{"topic":"user_preferences","content":"---\nname: User Preferences\ndescription: ...\ntype: user\n---\nbody"}})),
         mk("sys_memory_list", "Return the MEMORY.md index.",
             json!({"method":"sys_memory_list","params":{}})),
+        mk("sys_spin_up_439", "Spin up a 439 environment to handle a build/refactor/test task in the background. Returns a job_id immediately; completion is delivered as a future inbox event. While the job runs, you can keep replying to the user.",
+            json!({"method":"sys_spin_up_439","params":{"prompt":"Build a Rust CLI counter app","pack_kind":"rust_cli"}})),
+        mk("sys_poll_job", "Get the current status, last log line, and (if complete) the exported workspace path for a previously-started 439 job.",
+            json!({"method":"sys_poll_job","params":{"job_id":"abc-123-def-456"}})),
+        mk("sys_send_notification", "Send an OS-level notification (macOS Notification Center / Linux libnotify) to nudge the user. Title and body are plain strings.",
+            json!({"method":"sys_send_notification","params":{"title":"Job complete","body":"Counter app build succeeded","urgency":"normal"}})),
     ]
 }
 
@@ -132,7 +138,7 @@ mod tests {
         }
         assert_eq!(frame["role"], "task");
         assert_eq!(frame["task_type"], "chat");
-        assert_eq!(frame["syscalls"].as_array().unwrap().len(), 12);
+        assert_eq!(frame["syscalls"].as_array().unwrap().len(), 15);
         // 439's cpu rejects an empty kernel_prompt with a fatal — guard against regression.
         let kp = frame["kernel_prompt"].as_str().expect("kernel_prompt must be a string");
         assert!(!kp.is_empty(), "kernel_prompt must be non-empty (cpu fatals otherwise)");
