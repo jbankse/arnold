@@ -2,7 +2,9 @@ mod config;
 mod inbox;
 mod jail;
 mod memory;
+mod schema;
 mod session;
+mod syscall;
 mod uds_server;
 
 use anyhow::Result;
