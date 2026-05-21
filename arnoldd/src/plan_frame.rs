@@ -7,6 +7,22 @@ use crate::schema::schema_for_methods;
 
 const ROLE_MD: &str = include_str!("../../role/ROLE.md");
 
+/// Kernel-level system prompt shipped in every plan frame. 439's cpu requires this
+/// (it has no embedded fallback — see vendor/439/cpu/syscall_loop.h:50). This carries
+/// the protocol contract; Arnold's personality and per-syscall guidance live in
+/// ROLE.md (shipped separately as `role_payloads[0].body`).
+const KERNEL_PROMPT: &str = "You are running inside Arnold, a personal coding daemon, \
+exchanging JSON-line syscall frames with the daemon. Each turn, emit exactly one \
+syscall object matching the constraint_schema. Do not emit prose, multiple objects, \
+or text outside the JSON.\n\
+\n\
+Cadence: one syscall per turn; the daemon executes it and calls you again with the \
+result. Use sys_reply to send text to the user. End each user-facing interaction \
+with sys_done; the daemon will hold for the next user message.\n\
+\n\
+If a syscall errors, read the error and try a different approach — do not retry \
+identical params. If blocked, sys_reply briefly explaining what's stuck, then sys_done.";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyscallSpec {
     pub method: String,
@@ -58,7 +74,7 @@ impl PlanFrameBuilder {
             "parent_task_id": null,
             "l2_controls": {},
             "live_tokens_estimate_first_turn": 0,
-            "kernel_prompt": "",
+            "kernel_prompt": KERNEL_PROMPT,
             "tool_priority": { "order": [], "low_priority": [] }
         }))
     }
@@ -117,5 +133,8 @@ mod tests {
         assert_eq!(frame["role"], "task");
         assert_eq!(frame["task_type"], "chat");
         assert_eq!(frame["syscalls"].as_array().unwrap().len(), 12);
+        // 439's cpu rejects an empty kernel_prompt with a fatal — guard against regression.
+        let kp = frame["kernel_prompt"].as_str().expect("kernel_prompt must be a string");
+        assert!(!kp.is_empty(), "kernel_prompt must be non-empty (cpu fatals otherwise)");
     }
 }
