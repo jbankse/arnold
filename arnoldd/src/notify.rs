@@ -12,6 +12,8 @@ use tokio::process::Command;
 /// ignores urgency; Linux passes it through to notify-send.
 pub async fn dispatch(title: &str, body: &str, urgency: Option<&str>) -> Result<()> {
     #[cfg(target_os = "macos")]
+    let _ = urgency;
+    #[cfg(target_os = "macos")]
     {
         let script = format!(
             "display notification {body} with title {title}",
@@ -52,9 +54,9 @@ pub async fn dispatch(title: &str, body: &str, urgency: Option<&str>) -> Result<
         return Ok(());
     }
 
-    #[allow(unreachable_code)]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        let _ = urgency;
+        let _ = (title, body, urgency);
         Err(anyhow!("OS notifications are only supported on macOS and Linux in v0b"))
     }
 }
