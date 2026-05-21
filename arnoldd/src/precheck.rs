@@ -29,10 +29,13 @@ pub async fn run(config: &ArnoldConfig) -> Result<String> {
     cpu.send_plan(plan).await?;
     cpu.send_step().await?;
 
-    // Read frames with a 10s budget; we tell cpu to fail on whatever it emits
-    // first so it shuts down quickly. Any syscall we see -> send_error so cpu
-    // moves on; finished -> success.
-    let budget = Duration::from_secs(10);
+    // Default 30s budget; cold-start Anthropic first-turn latency can plausibly cross
+    // 10s on slow networks. Override via `ARNOLDD_PRECHECK_TIMEOUT_SECS` if needed.
+    let budget_secs: u64 = std::env::var("ARNOLDD_PRECHECK_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(30);
+    let budget = Duration::from_secs(budget_secs);
     let outcome = timeout(budget, async {
         loop {
             match cpu.read_up().await {
@@ -43,7 +46,19 @@ pub async fn run(config: &ArnoldConfig) -> Result<String> {
                     cpu.send_step().await?;
                 }
                 Ok(Some((UpFrame::Usage { .. }, _))) => continue,
-                Ok(Some((UpFrame::Other, _))) => continue,
+                Ok(Some((UpFrame::Other, raw))) => {
+                    // cpu emits provider_error frames for fatal LLM-call failures
+                    // (bad auth, exhausted retries, refusal). Surface them so --check
+                    // reports the real cause instead of a generic timeout.
+                    if raw.get("type").and_then(|v| v.as_str()) == Some("provider_error") {
+                        let message = raw.get("message")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| format!("provider_error (no message): {raw}"));
+                        return Err(anyhow!("provider error during precheck: {message}"));
+                    }
+                    continue;
+                }
                 Err(e) => return Err(anyhow!("cpu read error: {e}")),
             }
         }
@@ -51,7 +66,7 @@ pub async fn run(config: &ArnoldConfig) -> Result<String> {
 
     let result = match outcome {
         Ok(r) => r,
-        Err(_) => Err(anyhow!("cpu precheck timed out after {budget:?}")),
+        Err(_) => Err(anyhow!("cpu precheck timed out after {budget_secs}s")),
     };
 
     let _ = cpu.shutdown().await;
