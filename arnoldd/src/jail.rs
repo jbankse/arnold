@@ -114,6 +114,26 @@ mod tests {
     }
 
     #[test]
+    fn add_root_extends_jail_scope() {
+        // Simulates the per-session cwd auto-allowlist: a jail starts with one root,
+        // then session.cwd is added via add_root. Probe paths under the new root
+        // must transition from rejected → accepted.
+        let original = TempDir::new().unwrap();
+        let session_cwd = TempDir::new().unwrap();
+        let probe = session_cwd.path().join("readme.md");
+        std::fs::write(&probe, "hi").unwrap();
+
+        let mut jail = Jail::new(vec![original.path().to_path_buf()]);
+        // Before add_root: probe is outside the jail.
+        assert!(jail.validate_inside_any(&probe).is_err(),
+            "probe should NOT be in jail before add_root");
+        jail.add_root(session_cwd.path().to_path_buf());
+        // After add_root: probe is in jail.
+        assert!(jail.validate_inside_any(&probe).is_ok(),
+            "probe should be in jail after add_root");
+    }
+
+    #[test]
     fn validate_inside_any_rejects_parent_dir_in_nonexistent_path() {
         let tmp = TempDir::new().unwrap();
         let jail = Jail::new(vec![tmp.path().to_path_buf()]);

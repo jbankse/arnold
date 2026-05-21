@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["arnold-wire", "arnoldd", "arnold-cli"]
+members = ["arnold-wire", "arnoldd"]
 
 [workspace.package]
 edition = "2021"
@@ -22,3 +22,5 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 toml = "0.8"
 dirs = "5"
+notify-rust = "4"
+which = "6"

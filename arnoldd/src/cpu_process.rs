@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
@@ -11,9 +12,22 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 pub enum UpFrame {
     Syscall { id: u64, method: String, params: Value },
     Finished,
-    /// Catch-all for any frame type the v0a daemon doesn't directly handle
-    /// (usage, archive_l2, etc.). The session loop pattern-matches the inner
-    /// frame to surface provider_error to the user as a DaemonEvent::Error.
+    Usage {
+        #[serde(default)] provider: String,
+        #[serde(default)] model: String,
+        // cpu emits these as JSON numbers that may be integer (18) OR float
+        // (18.0) — confirmed in the wild. f64 accepts both shapes; the values
+        // are currently informational only (UsageMeter consumes cost_usd, not
+        // tokens), so the precision loss vs. u64 is irrelevant.
+        #[serde(default)] input_tokens: f64,
+        #[serde(default)] output_tokens: f64,
+        #[serde(default)] total_tokens: f64,
+        #[serde(default)] estimated_cost_usd: Option<f64>,
+        #[serde(default)] actual_cost_usd: Option<f64>,
+    },
+    /// Catch-all for any frame type the daemon doesn't directly handle
+    /// (archive_l2, provider_error, etc.). The session loop pattern-matches
+    /// the raw Value to surface provider_error as DaemonEvent::Error.
     #[serde(other)]
     Other,
 }
@@ -25,6 +39,10 @@ pub enum DownFrame<'a> {
     Step { task_id: &'a str },
     Result { id: u64, result: Value },
     Error { id: u64, message: String },
+    /// Tell cpu to break its outer read loop and exit. Used after a `sys_done`
+    /// syscall so cpu doesn't make another LLM call to "ack the done" (which
+    /// would just make the LLM call sys_done again — infinite loop).
+    Finished,
 }
 
 pub struct CpuProcess {
@@ -32,6 +50,10 @@ pub struct CpuProcess {
     stdin: ChildStdin,
     stdout_lines: tokio::io::Lines<BufReader<ChildStdout>>,
     task_id: String,
+    /// Most-recent ~16k of cpu's stderr, drained continuously by a background
+    /// task so we can surface it as a user-facing error when cpu fatals without
+    /// emitting a `finished` up-frame (e.g. missing ANTHROPIC_API_KEY).
+    stderr_tail: Arc<Mutex<String>>,
 }
 
 impl CpuProcess {
@@ -40,22 +62,57 @@ impl CpuProcess {
         provider: &str,
         model: &str,
         task_id: String,
+        extra_env: &[(String, String)],
     ) -> Result<Self> {
-        // Note: provider API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) flow via
-        // parent-process env inheritance (tokio::process::Command does not env_clear by default).
-        let mut child = Command::new(binary)
-            .env("AGENT_LLM_PROVIDER", provider)
+        // Note: provider API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) come from
+        // `extra_env` (sourced from ~/.arnold/secrets.toml at the caller). Parent-process
+        // env still inherits — extra_env overrides anything already in the env.
+        let mut cmd = Command::new(binary);
+        cmd.env("AGENT_LLM_PROVIDER", provider)
             .env("AGENT_MODEL", model)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .kill_on_drop(true)
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        for (k, v) in extra_env {
+            cmd.env(k, v);
+        }
+        let mut child = cmd
             .spawn()
             .map_err(|e| anyhow!("failed to spawn cpu at {}: {e}", binary.display()))?;
         let stdin = child.stdin.take().ok_or_else(|| anyhow!("no stdin on cpu"))?;
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout on cpu"))?;
+        let stderr = child.stderr.take().ok_or_else(|| anyhow!("no stderr on cpu"))?;
         let stdout_lines = BufReader::new(stdout).lines();
-        Ok(Self { child, stdin, stdout_lines, task_id })
+
+        let stderr_tail = Arc::new(Mutex::new(String::new()));
+        let tail_writer = stderr_tail.clone();
+        let mut stderr_lines = BufReader::new(stderr).lines();
+        tokio::spawn(async move {
+            while let Ok(Some(line)) = stderr_lines.next_line().await {
+                // Tee each line into arnoldd's tracing so we can debug cpu's
+                // behavior live (e.g. silent hangs where cpu emits no frame
+                // for tens of seconds). No custom target — must be filterable
+                // via the default `arnoldd=info` envfilter.
+                tracing::info!("cpu_stderr: {line}");
+                if let Ok(mut buf) = tail_writer.lock() {
+                    buf.push_str(&line);
+                    buf.push('\n');
+                    if buf.len() > 16_000 {
+                        let drain_until = buf.len() - 12_000;
+                        buf.drain(..drain_until);
+                    }
+                }
+            }
+        });
+
+        Ok(Self { child, stdin, stdout_lines, task_id, stderr_tail })
+    }
+
+    /// Snapshot the buffered cpu stderr so far. Used by the session loop to
+    /// surface a meaningful error when cpu fatals before emitting any up-frame.
+    pub fn stderr_tail(&self) -> String {
+        self.stderr_tail.lock().map(|s| s.clone()).unwrap_or_default()
     }
 
     pub async fn send_plan(&mut self, plan: Value) -> Result<()> {
@@ -66,6 +123,12 @@ impl CpuProcess {
         let task_id = self.task_id.clone();
         let frame = DownFrame::Step { task_id: &task_id };
         self.write_frame(&frame).await
+    }
+
+    /// Tell cpu to break its outer read loop. Use after sys_done so cpu
+    /// doesn't loop into another LLM call.
+    pub async fn send_finished(&mut self) -> Result<()> {
+        self.write_frame(&DownFrame::Finished).await
     }
 
     pub async fn send_result(&mut self, id: u64, result: Value) -> Result<()> {

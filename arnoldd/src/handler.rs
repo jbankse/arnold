@@ -1,14 +1,20 @@
 use anyhow::Result;
 use serde_json::Value;
+use std::path::PathBuf;
 use std::sync::Arc;
 use crate::syscall::Syscall;
 use crate::jail::Jail;
+use crate::jobs::JobTable;
 use crate::memory::MemoryStore;
 use crate::session::SessionState;
 
 pub struct HandlerContext {
     pub jail: Arc<Jail>,
     pub memory: Arc<MemoryStore>,
+    pub jobs: JobTable,
+    pub bios_binary: PathBuf,
+    pub runtime_image: String,
+    pub arnold_dir: PathBuf,
     pub session: SessionState,
 }
 
@@ -29,5 +35,12 @@ pub async fn dispatch(ctx: &HandlerContext, syscall: Syscall) -> Result<Value> {
         MemoryRead { topic } => crate::handlers::memory_syscalls::memory_read(ctx, topic).await,
         MemoryWrite { topic, content } => crate::handlers::memory_syscalls::memory_write(ctx, topic, content).await,
         MemoryList {} => crate::handlers::memory_syscalls::memory_list(ctx).await,
+        // v0b — implementations in Task 8 / Task 9
+        SpinUp439 { prompt, pack_kind, export_workspace_to, env } =>
+            crate::handlers::dispatch_439::spin_up_439(ctx, prompt, pack_kind, export_workspace_to, env).await,
+        PollJob { job_id } =>
+            crate::handlers::dispatch_439::poll_job(ctx, job_id).await,
+        SendNotification { title, body, urgency } =>
+            crate::handlers::notifications::send_notification(ctx, title, body, urgency).await,
     }
 }

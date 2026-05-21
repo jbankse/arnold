@@ -82,7 +82,12 @@ pub async fn search(
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
 
     let mut child = cmd.spawn()
-        .map_err(|e| anyhow!("ripgrep (rg) not found on PATH or failed to spawn: {e}"))?;
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => anyhow!(
+                "ripgrep (rg) not found on PATH. Install via `brew install ripgrep` (macOS) or your distro's package manager (Linux)."
+            ),
+            _ => anyhow!("failed to spawn rg: {e}"),
+        })?;
     let mut out = String::new();
     if let Some(mut so) = child.stdout.take() {
         so.read_to_string(&mut out).await?;
@@ -108,18 +113,26 @@ pub async fn search(
 mod tests {
     use super::*;
     use crate::jail::Jail;
+    use crate::jobs::JobTable;
     use crate::memory::MemoryStore;
     use crate::session::SessionState;
-    use std::sync::Arc;
+    use rusqlite::Connection;
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
     use tokio::sync::mpsc;
     use uuid::Uuid;
 
     fn ctx(jail_root: &std::path::Path) -> HandlerContext {
         let (tx, _rx) = mpsc::unbounded_channel();
+        let conn = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+        let jobs = JobTable::attach(conn).unwrap();
         HandlerContext {
             jail: Arc::new(Jail::new(vec![jail_root.to_path_buf()])),
             memory: Arc::new(MemoryStore::open(&jail_root.join("mem")).unwrap()),
+            jobs,
+            bios_binary: jail_root.join("bios"),
+            runtime_image: "runtime/os:local".to_string(),
+            arnold_dir: jail_root.to_path_buf(),
             session: SessionState {
                 session_id: Uuid::nil(),
                 cwd: jail_root.to_path_buf(),

@@ -97,6 +97,13 @@ impl Inbox {
         Ok(out)
     }
 
+    /// Return a clone of the shared connection handle so other subsystems
+    /// (e.g. JobTable) can attach to the same SQLite database without opening
+    /// a second file handle.
+    pub fn connection(&self) -> std::sync::Arc<std::sync::Mutex<rusqlite::Connection>> {
+        self.0.clone()
+    }
+
     pub fn mark_consumed(&self, id: i64) -> Result<()> {
         let conn = self.0.lock().unwrap();
         let now = Utc::now().to_rfc3339();

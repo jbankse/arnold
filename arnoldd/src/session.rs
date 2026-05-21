@@ -27,21 +27,40 @@ pub struct DaemonState {
     pub config: Arc<ArnoldConfig>,
     pub jail: Arc<Jail>,
     pub memory: Arc<MemoryStore>,
+    pub jobs: crate::jobs::JobTable,
+    pub arnold_dir: std::path::PathBuf,
     pub sessions: Arc<Mutex<HashMap<Uuid, SessionState>>>,
+    pub usage: crate::usage_meter::UsageMeter,
+    /// Provider API keys, read at startup and mutable via SetProviderKey.
+    /// RwLock so reads (per cpu spawn) don't block other reads; writes (TUI
+    /// settings overlay) are rare.
+    pub secrets: Arc<tokio::sync::RwLock<crate::secrets::Secrets>>,
 }
 
 impl DaemonState {
-    pub fn new(config: ArnoldConfig, jail: Jail, memory: MemoryStore) -> Self {
+    pub fn new(
+        config: ArnoldConfig,
+        jail: Jail,
+        memory: MemoryStore,
+        jobs: crate::jobs::JobTable,
+        arnold_dir: std::path::PathBuf,
+        secrets: crate::secrets::Secrets,
+    ) -> Self {
         Self {
             config: Arc::new(config),
             jail: Arc::new(jail),
             memory: Arc::new(memory),
+            jobs,
+            arnold_dir,
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            usage: crate::usage_meter::UsageMeter::default(),
+            secrets: Arc::new(tokio::sync::RwLock::new(secrets)),
         }
     }
 
     pub async fn open(&self, cwd: PathBuf, client: ClientSender) -> Uuid {
         let id = Uuid::new_v4();
+        tracing::info!(session = %id, cwd = %cwd.display(), "session opened; cwd auto-allowlisted for this session");
         self.sessions.lock().await.insert(id, SessionState { session_id: id, cwd, client });
         id
     }
@@ -52,17 +71,23 @@ impl DaemonState {
 
     pub async fn close(&self, id: Uuid) {
         self.sessions.lock().await.remove(&id);
+        let _ = self.usage.forget(id);
     }
 }
 
 /// Drive one user-message turn end-to-end.
 pub async fn handle_user_message(state: DaemonState, session: SessionState, text: String) -> Result<()> {
     let task_id = Uuid::new_v4();
+    let extra_env = {
+        let s = state.secrets.read().await;
+        s.as_env_pairs()
+    };
     let mut cpu = CpuProcess::spawn(
         &state.config.cpu_binary,
         &state.config.llm_provider,
         &state.config.model,
         task_id.to_string(),
+        &extra_env,
     ).await?;
 
     let context = format!(
@@ -79,21 +104,80 @@ pub async fn handle_user_message(state: DaemonState, session: SessionState, text
     cpu.send_plan(plan).await?;
     cpu.send_step().await?;
 
+    // Per-session jail: take the daemon-wide roots + add this session's cwd. This is
+    // what lets `arnold` Just Work from any shell directory — the TUI sends its cwd in
+    // OpenSession and the daemon auto-allowlists it for the session's lifetime. The cwd
+    // is trusted because it comes from the local UDS client (which is the user).
+    let mut session_jail = (*state.jail).clone();
+    session_jail.add_root(session.cwd.clone());
     let ctx = HandlerContext {
-        jail: state.jail.clone(),
+        jail: Arc::new(session_jail),
         memory: state.memory.clone(),
+        jobs: state.jobs.clone(),
+        bios_binary: state.config.bios_binary.clone(),
+        runtime_image: state.config.runtime_image.clone(),
+        arnold_dir: state.arnold_dir.clone(),
         session: session.clone(),
     };
 
+    let mut saw_finished = false;
+    let mut frame_n: u32 = 0;
     loop {
         let frame_with_raw = cpu.read_up().await?;
+        frame_n += 1;
+        if let Some((_, raw)) = &frame_with_raw {
+            let kind = raw.get("type").and_then(|v| v.as_str()).unwrap_or("<no-type>");
+            // Truncate so a giant frame doesn't spam the log.
+            let raw_str = raw.to_string();
+            let trunc: String = raw_str.chars().take(500).collect();
+            tracing::info!(session = %session.session_id, n = frame_n, kind = %kind, raw = %trunc, "cpu frame");
+        } else {
+            tracing::info!(session = %session.session_id, n = frame_n, "cpu stdout closed");
+        }
         match frame_with_raw {
-            None => break,
-            Some((UpFrame::Finished, _)) => break,
+            None => {
+                // cpu's stdout closed. If we never saw a `finished` frame, this
+                // is a fatal (most commonly: missing ANTHROPIC_API_KEY, bad
+                // binary, etc.). Surface the stderr tail so the TUI shows the
+                // real cause instead of just hanging silently.
+                if !saw_finished {
+                    let tail = cpu.stderr_tail();
+                    let trimmed = tail.trim();
+                    let message = if trimmed.is_empty() {
+                        "cpu exited without emitting any frame and produced no stderr; check ~/.arnold/arnoldd.err".to_string()
+                    } else {
+                        format!("cpu exited unexpectedly. stderr tail:\n{trimmed}")
+                    };
+                    let _ = session.client.send(DaemonEvent::Error {
+                        session_id: Some(session.session_id),
+                        message,
+                    });
+                }
+                break;
+            }
+            Some((UpFrame::Finished, _)) => {
+                saw_finished = true;
+                break;
+            }
+            Some((UpFrame::Usage { provider, model, estimated_cost_usd, actual_cost_usd, .. }, _)) => {
+                match state.usage.record(session.session_id, provider, model, estimated_cost_usd, actual_cost_usd) {
+                    Ok(Some(tc)) => {
+                        let _ = session.client.send(crate::usage_meter::cost_event(session.session_id, &tc));
+                    }
+                    Ok(None) => { /* no cost number; skip */ }
+                    Err(e) => tracing::warn!("usage_meter.record failed: {e}"),
+                }
+                // cpu is step-driven: after emitting a frame it sits waiting for
+                // the next step. Without this we'd hang forever after the first
+                // usage frame, because the pending syscall frame stays queued
+                // inside cpu until another step pulls it out.
+                cpu.send_step().await?;
+                continue;
+            }
             Some((UpFrame::Other, raw)) => {
                 // cpu emits provider_error frames when an LLM call fails terminally
                 // (bad auth, exhausted retry budget, refusal, etc.). v0a surfaces
-                // these to the user; everything else (usage, archive_l2) is ignored.
+                // these to the user; everything else (archive_l2, unknown frames) is ignored.
                 if raw.get("type").and_then(|v| v.as_str()) == Some("provider_error") {
                     let message = raw.get("message")
                         .and_then(|v| v.as_str())
@@ -104,16 +188,39 @@ pub async fn handle_user_message(state: DaemonState, session: SessionState, text
                         message: format!("provider error: {message}"),
                     });
                 }
+                // cpu is step-driven — same reason as the Usage arm above.
+                cpu.send_step().await?;
                 continue;
             }
             Some((UpFrame::Syscall { id, method, params }, _)) => {
+                tracing::info!(session = %session.session_id, id, method = %method, "syscall received");
+                let is_terminal = method == "sys_done";
                 let raw = serde_json::json!({ "method": method, "params": params });
                 match serde_json::from_value::<Syscall>(raw) {
                     Ok(syscall) => match dispatch(&ctx, syscall).await {
-                        Ok(result) => cpu.send_result(id, result).await?,
-                        Err(e) => cpu.send_error(id, e.to_string()).await?,
+                        Ok(result) => {
+                            tracing::info!(session = %session.session_id, id, method = %method, "syscall ok");
+                            cpu.send_result(id, result).await?;
+                        }
+                        Err(e) => {
+                            tracing::warn!(session = %session.session_id, id, method = %method, error = %e, "syscall handler error");
+                            cpu.send_error(id, e.to_string()).await?;
+                        }
                     },
-                    Err(e) => cpu.send_error(id, format!("invalid syscall: {e}")).await?,
+                    Err(e) => {
+                        tracing::warn!(session = %session.session_id, id, method = %method, error = %e, "syscall did not match Syscall enum");
+                        cpu.send_error(id, format!("invalid syscall: {e}")).await?;
+                    }
+                }
+                if is_terminal {
+                    // sys_done means the LLM is done with this turn. Send cpu
+                    // a `finished` frame so it breaks its outer loop instead
+                    // of making another LLM call (which would just have the
+                    // LLM call sys_done again — infinite loop, observed in
+                    // the wild before this guard was added).
+                    cpu.send_finished().await?;
+                    saw_finished = true;
+                    break;
                 }
                 cpu.send_step().await?;
             }
