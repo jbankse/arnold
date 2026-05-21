@@ -39,6 +39,10 @@ pub enum DownFrame<'a> {
     Step { task_id: &'a str },
     Result { id: u64, result: Value },
     Error { id: u64, message: String },
+    /// Tell cpu to break its outer read loop and exit. Used after a `sys_done`
+    /// syscall so cpu doesn't make another LLM call to "ack the done" (which
+    /// would just make the LLM call sys_done again — infinite loop).
+    Finished,
 }
 
 pub struct CpuProcess {
@@ -86,6 +90,11 @@ impl CpuProcess {
         let mut stderr_lines = BufReader::new(stderr).lines();
         tokio::spawn(async move {
             while let Ok(Some(line)) = stderr_lines.next_line().await {
+                // Tee each line into arnoldd's tracing so we can debug cpu's
+                // behavior live (e.g. silent hangs where cpu emits no frame
+                // for tens of seconds). No custom target — must be filterable
+                // via the default `arnoldd=info` envfilter.
+                tracing::info!("cpu_stderr: {line}");
                 if let Ok(mut buf) = tail_writer.lock() {
                     buf.push_str(&line);
                     buf.push('\n');
@@ -114,6 +123,12 @@ impl CpuProcess {
         let task_id = self.task_id.clone();
         let frame = DownFrame::Step { task_id: &task_id };
         self.write_frame(&frame).await
+    }
+
+    /// Tell cpu to break its outer read loop. Use after sys_done so cpu
+    /// doesn't loop into another LLM call.
+    pub async fn send_finished(&mut self) -> Result<()> {
+        self.write_frame(&DownFrame::Finished).await
     }
 
     pub async fn send_result(&mut self, id: u64, result: Value) -> Result<()> {

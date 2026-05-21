@@ -121,8 +121,19 @@ pub async fn handle_user_message(state: DaemonState, session: SessionState, text
     };
 
     let mut saw_finished = false;
+    let mut frame_n: u32 = 0;
     loop {
         let frame_with_raw = cpu.read_up().await?;
+        frame_n += 1;
+        if let Some((_, raw)) = &frame_with_raw {
+            let kind = raw.get("type").and_then(|v| v.as_str()).unwrap_or("<no-type>");
+            // Truncate so a giant frame doesn't spam the log.
+            let raw_str = raw.to_string();
+            let trunc: String = raw_str.chars().take(500).collect();
+            tracing::info!(session = %session.session_id, n = frame_n, kind = %kind, raw = %trunc, "cpu frame");
+        } else {
+            tracing::info!(session = %session.session_id, n = frame_n, "cpu stdout closed");
+        }
         match frame_with_raw {
             None => {
                 // cpu's stdout closed. If we never saw a `finished` frame, this
@@ -156,6 +167,11 @@ pub async fn handle_user_message(state: DaemonState, session: SessionState, text
                     Ok(None) => { /* no cost number; skip */ }
                     Err(e) => tracing::warn!("usage_meter.record failed: {e}"),
                 }
+                // cpu is step-driven: after emitting a frame it sits waiting for
+                // the next step. Without this we'd hang forever after the first
+                // usage frame, because the pending syscall frame stays queued
+                // inside cpu until another step pulls it out.
+                cpu.send_step().await?;
                 continue;
             }
             Some((UpFrame::Other, raw)) => {
@@ -172,16 +188,39 @@ pub async fn handle_user_message(state: DaemonState, session: SessionState, text
                         message: format!("provider error: {message}"),
                     });
                 }
+                // cpu is step-driven — same reason as the Usage arm above.
+                cpu.send_step().await?;
                 continue;
             }
             Some((UpFrame::Syscall { id, method, params }, _)) => {
+                tracing::info!(session = %session.session_id, id, method = %method, "syscall received");
+                let is_terminal = method == "sys_done";
                 let raw = serde_json::json!({ "method": method, "params": params });
                 match serde_json::from_value::<Syscall>(raw) {
                     Ok(syscall) => match dispatch(&ctx, syscall).await {
-                        Ok(result) => cpu.send_result(id, result).await?,
-                        Err(e) => cpu.send_error(id, e.to_string()).await?,
+                        Ok(result) => {
+                            tracing::info!(session = %session.session_id, id, method = %method, "syscall ok");
+                            cpu.send_result(id, result).await?;
+                        }
+                        Err(e) => {
+                            tracing::warn!(session = %session.session_id, id, method = %method, error = %e, "syscall handler error");
+                            cpu.send_error(id, e.to_string()).await?;
+                        }
                     },
-                    Err(e) => cpu.send_error(id, format!("invalid syscall: {e}")).await?,
+                    Err(e) => {
+                        tracing::warn!(session = %session.session_id, id, method = %method, error = %e, "syscall did not match Syscall enum");
+                        cpu.send_error(id, format!("invalid syscall: {e}")).await?;
+                    }
+                }
+                if is_terminal {
+                    // sys_done means the LLM is done with this turn. Send cpu
+                    // a `finished` frame so it breaks its outer loop instead
+                    // of making another LLM call (which would just have the
+                    // LLM call sys_done again — infinite loop, observed in
+                    // the wild before this guard was added).
+                    cpu.send_finished().await?;
+                    saw_finished = true;
+                    break;
                 }
                 cpu.send_step().await?;
             }
