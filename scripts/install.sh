@@ -72,9 +72,24 @@ else
   echo "WARNING: autostart not supported on $OS; you'll need to run arnoldd manually."
 fi
 
+# PATH check: make sure $BIN_DIR is reachable from new shells. Append to ~/.zshrc
+# with a marker comment so re-installs don't duplicate the line.
+ZSHRC="$HOME/.zshrc"
+MARKER="# added by arnold install — puts ~/.local/bin (arnold's BIN_DIR) on PATH"
+if [ ! -f "$ZSHRC" ] || ! grep -qF "$MARKER" "$ZSHRC"; then
+  {
+    echo ""
+    echo "$MARKER"
+    echo "export PATH=\"$BIN_DIR:\$PATH\""
+  } >> "$ZSHRC"
+  echo "Added $BIN_DIR to PATH in $ZSHRC. Open a new terminal or: source $ZSHRC"
+fi
+
 echo
 echo "Installed. arnoldd is autostarting; arnold (TUI) is available at:"
 echo "  $BIN_DIR/arnold"
 if [[ "$OS" == "Darwin" ]]; then
   echo "Menu bar icon should appear within a few seconds."
 fi
+echo
+echo "Once your shell PATH picks up $BIN_DIR, launch the TUI with: arnold"
