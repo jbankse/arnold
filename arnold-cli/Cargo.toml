@@ -9,3 +9,10 @@ name = "arnold"
 path = "src/main.rs"
 
 [dependencies]
+arnold-wire = { path = "../arnold-wire" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+dirs.workspace = true
+uuid.workspace = true
