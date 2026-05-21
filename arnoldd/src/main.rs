@@ -4,6 +4,7 @@ mod handler;
 mod handlers;
 mod inbox;
 mod jail;
+mod jobs;
 mod memory;
 mod plan_frame;
 mod schema;
