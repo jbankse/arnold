@@ -47,6 +47,25 @@ pub enum Syscall {
     MemoryWrite { topic: String, content: String },
     #[serde(rename = "sys_memory_list")]
     MemoryList {},
+
+    // v0b: 439 dispatch
+    #[serde(rename = "sys_spin_up_439")]
+    SpinUp439 {
+        prompt: String,
+        #[serde(default)] pack_kind: Option<String>,
+        #[serde(default)] export_workspace_to: Option<String>,
+        #[serde(default)] env: Option<std::collections::HashMap<String, String>>,
+    },
+    #[serde(rename = "sys_poll_job")]
+    PollJob { job_id: String },
+
+    // v0b: notifications
+    #[serde(rename = "sys_send_notification")]
+    SendNotification {
+        title: String,
+        body: String,
+        #[serde(default)] urgency: Option<String>,
+    },
 }
 
 impl Syscall {
@@ -65,6 +84,9 @@ impl Syscall {
             MemoryRead { .. } => "sys_memory_read",
             MemoryWrite { .. } => "sys_memory_write",
             MemoryList {} => "sys_memory_list",
+            SpinUp439 { .. } => "sys_spin_up_439",
+            PollJob { .. } => "sys_poll_job",
+            SendNotification { .. } => "sys_send_notification",
         }
     }
 
@@ -75,6 +97,8 @@ impl Syscall {
             "sys_run_command",
             "sys_web_fetch",
             "sys_memory_read", "sys_memory_write", "sys_memory_list",
+            "sys_spin_up_439", "sys_poll_job",
+            "sys_send_notification",
         ]
     }
 }
@@ -95,6 +119,40 @@ mod tests {
     #[test]
     fn all_methods_matches_enum() {
         // Sanity: hand-maintained list matches the actual variants
-        assert_eq!(Syscall::all_methods().len(), 12);
+        assert_eq!(Syscall::all_methods().len(), 15);
+    }
+
+    #[test]
+    fn round_trip_spin_up_439() {
+        let s = Syscall::SpinUp439 {
+            prompt: "Build a counter app".into(),
+            pack_kind: Some("rust_cli".into()),
+            export_workspace_to: None,
+            env: None,
+        };
+        let j = serde_json::to_value(&s).unwrap();
+        assert_eq!(j["method"], "sys_spin_up_439");
+        let back: Syscall = serde_json::from_value(j).unwrap();
+        assert!(matches!(back, Syscall::SpinUp439 { .. }));
+    }
+
+    #[test]
+    fn round_trip_poll_job() {
+        let s = Syscall::PollJob { job_id: "abc-123".into() };
+        let j = serde_json::to_value(&s).unwrap();
+        assert_eq!(j["method"], "sys_poll_job");
+        let back: Syscall = serde_json::from_value(j).unwrap();
+        assert!(matches!(back, Syscall::PollJob { .. }));
+    }
+
+    #[test]
+    fn round_trip_send_notification() {
+        let s = Syscall::SendNotification {
+            title: "Test".into(),
+            body: "Body".into(),
+            urgency: None,
+        };
+        let j = serde_json::to_value(&s).unwrap();
+        assert_eq!(j["method"], "sys_send_notification");
     }
 }
