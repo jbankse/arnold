@@ -39,12 +39,15 @@ impl CpuProcess {
         model: &str,
         task_id: String,
     ) -> Result<Self> {
+        // Note: provider API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) flow via
+        // parent-process env inheritance (tokio::process::Command does not env_clear by default).
         let mut child = Command::new(binary)
             .env("AGENT_LLM_PROVIDER", provider)
             .env("AGENT_MODEL", model)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
+            .kill_on_drop(true)
             .spawn()
             .map_err(|e| anyhow!("failed to spawn cpu at {}: {e}", binary.display()))?;
         let stdin = child.stdin.take().ok_or_else(|| anyhow!("no stdin on cpu"))?;

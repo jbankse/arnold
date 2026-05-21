@@ -34,6 +34,14 @@ async fn main() -> Result<()> {
     let mut jail_roots = vec![arnold_dir.join("workspace")];
     jail_roots.extend(config.allowed_dirs.iter().cloned());
     std::fs::create_dir_all(&jail_roots[0])?;
+    for p in &config.allowed_dirs {
+        if let Err(e) = p.canonicalize() {
+            tracing::warn!(
+                "config.allowed_dirs entry {} cannot be canonicalized ({e}); jail roots use the literal path and may never match real candidate paths",
+                p.display(),
+            );
+        }
+    }
     let jail = Jail::new(jail_roots);
 
     let state = DaemonState::new(config, jail, memory);
