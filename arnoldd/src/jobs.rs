@@ -1,11 +1,10 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
-use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum JobStatus {
     Queued,
     Running,
@@ -112,13 +111,13 @@ impl JobTable {
         let now = Utc::now().to_rfc3339();
         if status.is_terminal() {
             conn.execute(
-                "UPDATE jobs SET status=?1, last_log_line=?2, updated_at=?3, completed_at=?3
+                "UPDATE jobs SET status=?1, last_log_line=COALESCE(?2, last_log_line), updated_at=?3, completed_at=?3
                  WHERE job_id=?4",
                 params![status.as_str(), last_log_line, now, job_id.to_string()],
             )?;
         } else {
             conn.execute(
-                "UPDATE jobs SET status=?1, last_log_line=?2, updated_at=?3
+                "UPDATE jobs SET status=?1, last_log_line=COALESCE(?2, last_log_line), updated_at=?3
                  WHERE job_id=?4",
                 params![status.as_str(), last_log_line, now, job_id.to_string()],
             )?;
@@ -126,6 +125,13 @@ impl JobTable {
         Ok(())
     }
 
+    /// Set the terminal state and completion artifacts for a job.
+    ///
+    /// Precondition: `status` should be a terminal state
+    /// (`Completed` / `Failed` / `Cancelled`). The caller is responsible
+    /// for upholding this — `finalize` does not enforce it because in
+    /// some error paths we want to record exit_code/message even if the
+    /// status arrived in an unusual way.
     pub fn finalize(&self, job_id: Uuid, status: JobStatus, exit_code: Option<i32>, exported_path: Option<&str>, message: &str) -> Result<()> {
         let conn = self.0.lock().map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
         let now = Utc::now().to_rfc3339();
@@ -253,5 +259,34 @@ mod tests {
         assert!(ids.contains(&a));
         assert!(ids.contains(&c));
         assert!(!ids.contains(&b), "completed job b should be excluded from active list");
+    }
+
+    #[test]
+    fn update_status_none_log_line_preserves_prior() {
+        let tmp = TempDir::new().unwrap();
+        let table = JobTable::attach(open_conn(tmp.path())).unwrap();
+        let sid = Uuid::new_v4();
+        let jid = table.create(sid, "x", None).unwrap();
+        table.update_status(jid, JobStatus::Running, Some("npm install")).unwrap();
+        // Now bump status without supplying a new log line — prior must be kept.
+        table.update_status(jid, JobStatus::Exporting, None).unwrap();
+        let job = table.get(jid).unwrap().unwrap();
+        assert_eq!(job.status, JobStatus::Exporting);
+        assert_eq!(job.last_log_line.as_deref(), Some("npm install"));
+    }
+
+    #[test]
+    fn finalize_failed_records_exit_code() {
+        let tmp = TempDir::new().unwrap();
+        let table = JobTable::attach(open_conn(tmp.path())).unwrap();
+        let sid = Uuid::new_v4();
+        let jid = table.create(sid, "x", None).unwrap();
+        table.finalize(jid, JobStatus::Failed, Some(1), None, "exit 1").unwrap();
+        let job = table.get(jid).unwrap().unwrap();
+        assert_eq!(job.status, JobStatus::Failed);
+        assert_eq!(job.exit_code, Some(1));
+        assert!(job.exported_path.is_none());
+        assert_eq!(job.message.as_deref(), Some("exit 1"));
+        assert!(job.completed_at.is_some());
     }
 }
