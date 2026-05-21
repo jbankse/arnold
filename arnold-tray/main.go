@@ -25,8 +25,9 @@ func onReady() {
 	mOpen := systray.AddMenuItem("Open arnold", "Launch the arnold TUI in a new Terminal window")
 	systray.AddSeparator()
 	mRestart := systray.AddMenuItem("Restart daemon", "Stop and relaunch arnoldd")
+	mStop := systray.AddMenuItem("Stop daemon", "Stop arnoldd (tray stays running)")
 	systray.AddSeparator()
-	mQuit := systray.AddMenuItem("Quit arnold-tray", "Exit the menu bar app")
+	mQuit := systray.AddMenuItem("Quit Arnold", "Stop the daemon and exit the menu bar app")
 
 	// Ping loop
 	go pingLoop()
@@ -37,7 +38,12 @@ func onReady() {
 			openArnoldTUI()
 		case <-mRestart.ClickedCh:
 			restartDaemon()
+		case <-mStop.ClickedCh:
+			stopDaemon()
 		case <-mQuit.ClickedCh:
+			// "Quit Arnold" means: shut down everything. Stop the daemon first
+			// so it doesn't keep eating cycles after the tray is gone.
+			stopDaemon()
 			systray.Quit()
 			return
 		}
@@ -112,4 +118,20 @@ func restartDaemon() {
 	plist := filepath.Join(home, "Library", "LaunchAgents", "com.arnold.arnoldd.plist")
 	_ = exec.Command("launchctl", "unload", plist).Run()
 	_ = exec.Command("launchctl", "load", plist).Run()
+}
+
+// stopDaemon unloads the LaunchAgent (so KeepAlive doesn't restart it) and
+// also pkills any direct-spawned arnoldd from `arnold` so the daemon really
+// dies regardless of how it was started. The socket file gets removed on
+// arnoldd's clean shutdown path; if a stale one lingers, the next install
+// or `arnold` invocation will reuse it (uds_server::bind removes-first).
+func stopDaemon() {
+	home, _ := os.UserHomeDir()
+	plist := filepath.Join(home, "Library", "LaunchAgents", "com.arnold.arnoldd.plist")
+	if _, err := os.Stat(plist); err == nil {
+		_ = exec.Command("launchctl", "unload", plist).Run()
+	}
+	// Catch direct-spawned arnoldd (from arnold-tui's ensureDaemon) — pkill is
+	// best-effort and harmless if nothing matches.
+	_ = exec.Command("pkill", "-x", "arnoldd").Run()
 }
