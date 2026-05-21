@@ -82,7 +82,12 @@ pub async fn search(
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
 
     let mut child = cmd.spawn()
-        .map_err(|e| anyhow!("ripgrep (rg) not found on PATH or failed to spawn: {e}"))?;
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => anyhow!(
+                "ripgrep (rg) not found on PATH. Install via `brew install ripgrep` (macOS) or your distro's package manager (Linux)."
+            ),
+            _ => anyhow!("failed to spawn rg: {e}"),
+        })?;
     let mut out = String::new();
     if let Some(mut so) = child.stdout.take() {
         so.read_to_string(&mut out).await?;

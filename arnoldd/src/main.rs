@@ -7,6 +7,7 @@ mod jail;
 mod jobs;
 mod memory;
 mod plan_frame;
+mod precheck;
 mod schema;
 mod session;
 mod syscall;
@@ -27,6 +28,21 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env()
             .add_directive("arnoldd=info".parse()?))
         .init();
+
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--check") {
+        let config = ArnoldConfig::load_or_default()?;
+        match precheck::run(&config).await {
+            Ok(msg) => {
+                println!("arnoldd --check OK: {msg}");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("arnoldd --check FAILED: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     let config = ArnoldConfig::load_or_default()?;
     let arnold_dir = ArnoldConfig::arnold_dir()?;
